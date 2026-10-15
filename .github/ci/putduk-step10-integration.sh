@@ -467,17 +467,20 @@ printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAM
 http="$(postiz_curl --silent --show-error --max-time 60 -o "$WORKDIR/upload.json" \
   -b "$WORKDIR/cookies.txt" -F "file=@$WORKDIR/test.png;type=image/png" \
   -w '%{http_code}' "$BASE_URL/api/media/upload-simple")"
-[[ "$http" == 200 ]] || { echo "Test image upload returned HTTP $http." >&2; exit 1; }
-read -r MEDIA_ID MEDIA_PATH < <(python3 - "$WORKDIR/upload.json" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1], encoding='utf-8'))
-if not m.get('id') or not m.get('path'): raise SystemExit('Uploaded media id/path missing.')
-print(m['id'], m['path'])
-PY
-)
-case "$MEDIA_PATH" in "$BASE_URL"/uploads/*) ;; *) echo 'Image is not using isolated local upload storage.' >&2; exit 1 ;; esac
+if ! media_response="$(node scripts/step10-upload-response.mjs "$http" "$WORKDIR/upload.json" "$BASE_URL")"; then
+  echo 'Test image upload response validation failed.' >&2
+  exit 1
+fi
+IFS=$'\t' read -r MEDIA_ID MEDIA_PATH <<< "$media_response"
 UPLOAD_RELATIVE_PATH="${MEDIA_PATH#"$BASE_URL"/uploads/}"
 [[ "$UPLOAD_RELATIVE_PATH" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}/[A-Za-z0-9._-]+\.png$ ]]
+dc exec -T postiz node -e '
+const fs = require("node:fs");
+const imagePath = `/uploads/${process.argv[1]}`;
+const image = fs.statSync(imagePath);
+if (!image.isFile() || image.size === 0) throw new Error("Uploaded image file is missing or empty.");
+' "$UPLOAD_RELATIVE_PATH"
+echo 'Uploaded image response and isolated stored file verified.'
 
 scheduled_date="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%S.000Z)"
 image_json="$(python3 -c 'import json,sys; print(json.dumps([{"id":sys.argv[1],"path":sys.argv[2]}]))' "$MEDIA_ID" "$MEDIA_PATH")"
