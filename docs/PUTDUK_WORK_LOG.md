@@ -103,4 +103,6 @@
 - 로컬 정적 검증: YAML 파싱, 트리거·권한·실행기·제한시간·로컬 빌드 및 게시 금지 조건 assertion, 인라인 JavaScript 문법, 셸 문법, 추적된 환경/자격증명 파일 검사 및 `git diff --check` 통과. 추적된 비밀 파일은 발견되지 않았다.
 - 이 기록 시점에 GitHub-hosted Actions 실행, runner의 실제 디스크/RAM/CPU, Google Fonts를 포함한 Docker 이미지 생성, 이미지 ID/크기/아키텍처/revision, 이미지 내 비밀정보 검색은 아직 검증되지 않았다. 실제 Actions 실행 결과 확인 전에는 이미지 빌드 성공으로 보고하지 않는다.
 - 기존 `.github/workflows/build.yml`은 push마다 별도 실행될 수 있으나 컨테이너 게시 workflow는 수정하거나 수동 실행하지 않았다. 기존 upstream GHCR 게시 workflow를 실행하지 않는다.
-- 다음: 이 워크플로와 작업 기록만 `work`에 커밋·푸시한 뒤 원격 SHA를 검증하고, Actions 실행 결과가 조회 가능한지 확인한다. 실행 결과의 디스크 사전검사 실패 또는 빌드 실패는 성공으로 표시하지 않는다.
+- 워크플로와 이 기록을 `work`에 커밋·푸시했다. 첫 푸시의 로컬·원격 SHA는 `f8b2e03605343d2d1bed6fa8af4e92cc7cbf9470`으로 일치했다. 해당 SHA가 Action의 예상 소스 커밋이다.
+- 실행 결과 확인을 위해 공개 GitHub Actions API를 조회했으나 현재 실행 환경의 프록시가 HTTP 403을 반환했다. 따라서 실제 run ID/URL, 상태, 디스크 사전검사, Docker 이미지 생성 및 검사 결과는 여전히 확인되지 않았다. Action 실행 성공으로 간주하지 않는다.
+- 다음: 사용자가 Actions 화면에서 해당 커밋 `f8b2e03605343d2d1bed6fa8af4e92cc7cbf9470`의 `PUTDUK Docker Build Check` 결과를 확인한다. 디스크 사전검사 실패 또는 빌드 실패는 성공으로 표시하지 않는다.
