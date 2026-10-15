@@ -102,7 +102,7 @@ secrets = [line.rstrip('\n') for line in open(sys.argv[2], encoding='utf-8') if 
 for secret in sorted(secrets, key=len, reverse=True):
     text = text.replace(secret, '[REDACTED]')
 text = re.sub(r'(?i)\b(?:postgres(?:ql)?|redis)://[^\s\"\'<>]+', '[REDACTED_CONNECTION_URL]', text)
-text = re.sub(r'(?i)(password|token|authorization|cookie|jwt_secret|client_secret|api[_-]?key)(\s*[:=]\s*)[^\s,;]+', r'\1\2[REDACTED]', text)
+text = re.sub(r'(?i)(password|token|authorization|cookie|secret|api[_-]?key)(\s*[:=]\s*)(?:Bearer\s+)?[^\s,;]+', r'\1\2[REDACTED]', text)
 text = re.sub(r'(?i)([?&](?:token|key|secret|password)=)[^&\s]+', r'\1[REDACTED]', text)
 text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*', r'\1[REDACTED]', text)
 text = re.sub(r'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
@@ -184,11 +184,23 @@ on_exit() {
   stop_sampler
   if (( status != 0 )); then
     echo '### Failure diagnostics collected before the workflow cleanup step'
-    postiz_failure_diagnostics
-    printf '\n### PUTDUK Step 10 diagnostic\n\n- Failed phase: %s\n- Script line and exit status are annotated in this job.\n- Raw service logs and test credentials are not included here.\n' \
-      "$CURRENT_PHASE" >> "$GITHUB_STEP_SUMMARY"
+    postiz_failure_diagnostics > "$WORKDIR/sanitized-failure-diagnostics.txt" 2>&1 || true
+    cat "$WORKDIR/sanitized-failure-diagnostics.txt"
+    {
+      printf '\n### PUTDUK Step 10 sanitized failure diagnostics\n\n- Failed phase: %s\n\n```text\n' "$CURRENT_PHASE"
+      cat "$WORKDIR/sanitized-failure-diagnostics.txt"
+      printf '\n```\n'
+    } >> "$GITHUB_STEP_SUMMARY"
+    python3 - "$WORKDIR/sanitized-failure-diagnostics.txt" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()
+message = '\n'.join(line[:300] for line in lines[-35:])
+message = message[:7000]
+message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+print(f'::error title=Step 10 sanitized Postiz diagnostics::{message}')
+PY
     echo 'Step 10 stopped on a failed assertion or service command.' >&2
-    echo 'Raw service logs are withheld from the public Actions log.' >&2
+    echo 'Only redacted Postiz diagnostics are mirrored to the job summary and annotation.' >&2
   fi
   resource_summary
   exit "$status"

@@ -144,4 +144,6 @@
 - 수정 대상은 `.github/ci/putduk-step10-integration.sh`와 관련 workflow path trigger다. `docker exec` 호출에서 잘못된 `-T`를 제거하고, stats 대상은 지원되는 `docker ps --filter name=...`로 run 전용 컨테이너 ID를 찾은 뒤 `docker stats` 인자로 넘기도록 한다. 진단 명령에는 timeout을 두고 PM2 프로세스별 상태/재시작 횟수/PID를 출력하되 환경값은 출력하지 않는다. 앱 시작 코드·UI·운영 Compose는 원인 확인 전 변경하지 않는다.
 - RED/GREEN 정적 회귀 확인: 수정 전 Python assertion은 두 잘못된 옵션을 모두 찾아 exit 1; 수정 후 같은 검사 통과. `bash -n`, workflow/Compose YAML 파싱, 두 Compose 파일의 test-variable 기반 `config --quiet`, `git diff --check`도 통과했다. Docker CLI에 없는 리소스를 넣어 option parsing을 확인했으며 컨테이너는 실행·삭제하지 않았다.
 - Cloud activation은 Node `22.20.0`을 제공한다. 기본 `pnpm` shim은 없는 Corepack `12.11.2`를 가리켜 실패하지만 `corepack pnpm@10.6.1`은 동작했다. Dockerfile은 컨테이너 안에서 npm으로 pnpm 10.6.1을 직접 설치하므로 이 호스트 shim 문제는 컨테이너의 4200 오류 원인이라는 증거가 없다. Cloud onboarding 설정은 변경하지 않았다.
-- 현재 통합 실행 한도는 0/3 사용. 첫 수정 push에서만 새로운 무료 `ubuntu-latest` 통합 실행을 시작하고, 성공 또는 구체적 오류에 따라 다음 수정을 결정한다.
+- 현재 통합 실행 한도: 첫 실행 `38800972657` 사용 (1/3). Docker 이미지 빌드는 성공했고, 통합 단계는 53초 뒤 `start and health-check six isolated services` phase에서 exit 1; run 전용 cleanup은 성공했다. 공개 annotations에는 실패 행이 `dc up --wait`이 호출되는 line 227이라고만 나와 구체 오류는 여전히 미확인이다. 이 짧은 경과 시간은 이전에 관찰된 4분 unhealthy와 다르므로 원인을 단정하지 않는다.
+- 상세 Actions step 로그는 익명 요청에서 계속 읽을 수 없었다. 첫 실행 진단 수정에 남아 있는 접근성 공백을 해결하기 위해, 다음 진단은 마스킹된 제한 출력만 job summary와 GitHub error annotation에도 남기도록 추가한다. 수정된 비밀값 필터 fixture, 셸/YAML 파싱, `git diff --check`가 통과했다.
+- 남은 실행 허용량: 2회. 다음 실행 결과에서 Postiz 실제 PM2/Next 오류를 확인하기 전까지 앱 시작 명령이나 애플리케이션 코드는 변경하지 않는다.
