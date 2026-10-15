@@ -7,6 +7,16 @@ on:
       - work
     paths:
       - .github/workflows/putduk-docker-build-check.yml
+      - .github/ci/putduk-step10-integration.sh
+      - .github/ci/docker-compose.step10-test.yaml
+      - Dockerfile.dev
+      - package.json
+      - pnpm-lock.yaml
+      - apps/frontend/**
+      - apps/backend/**
+      - apps/orchestrator/**
+      - libraries/**
+      - var/docker/nginx.conf
 
 permissions:
   contents: read
@@ -225,7 +235,7 @@ jobs:
       - name: Run isolated Step 10 integration checks
         if: success()
         shell: bash
-        # Step 10-A diagnostic run: collect Postiz-specific unhealthy details.
+        # Build and exercise the current work source when runtime-relevant inputs change.
         run: bash .github/ci/putduk-step10-integration.sh
 
       - name: Clean up only this Step 10 run

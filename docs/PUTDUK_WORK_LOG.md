@@ -134,3 +134,14 @@
 - 진단 실행 `38796024093` (커밋 `ebf09e3c9bf9084a55e6500f9375ab5b3826e869`)에서 이미지 빌드는 성공했다. 통합 단계는 4분 58초 후 실패했고, annotation은 같은 `docker compose` 실행 안에서 `start and health-check six isolated services` phase / 스크립트 line 57 / exit 1을 표시했다. run 전용 cleanup은 성공했다.
 - 익명 GitHub 화면에서 summary와 annotations는 읽을 수 있었으나, 상세 step log URL은 GitHub의 404 “Not Found” 페이지로 응답했다. 이 환경의 `gh auth status`도 `GH_TOKEN` 인증 실패를 보고해 상세 로그를 가져오지 못했다. 따라서 개선한 Postiz 상태·health·프로세스·포트·Prisma·메모리 진단 출력의 실제 내용은 미확인이다. Postiz unhealthy가 통합 단계 실패를 일으켰다는 사용자 제공 사실 외에 근본 앱 오류는 확정하지 않는다.
 - 다음: 사용자가 run `38796024093`의 “Run isolated Step 10 integration checks” 로그에서 새로 출력된 Postiz diagnostics를 비밀값 제거 후 공유한다. 그 출력으로 원인을 판별하고, 앱 코드 변경이 필요하면 별도 승인을 기다린다. 추가 Action 재실행은 하지 않는다.
+
+## 최종 안정화 — 첫 원인 추적 및 진단 명령 수정 (2026-10-15)
+
+- 시작 시 저장소 `goldeget/putduk-social-auto`, 브랜치 `work`, 로컬·원격 SHA `462b86e286fe14a186bcc8b0ebd7bb533e39898d` 일치, 깨끗한 작업 트리를 확인했다. `main`은 읽기 전용으로 SHA `0956d49ab79acb314f700779b92677830ac83a9d`를 조회했다.
+- 전달된 Action 로그에서 Postiz 프로세스는 실행 중, `OOMKilled=false`, Prisma 성공, Nginx 실행, 프런트엔드 포트 4200 연결 거부, Nginx upstream `http://127.0.0.1:4200/`의 `connect() failed (111: Connection refused)`를 확인했다. 이는 Next.js가 해당 시점에 4200 포트에서 수신하지 않았음을 뜻하지만, Next.js가 종료된 직접 원인은 아직 확인 전이다.
+- 소스 추적: Next.js 설정은 `output: standalone`을 쓰지 않고, 프런트엔드 실행 스크립트는 `dotenv -e ../../.env -- next start -p 4200`이다. Compose가 빈 `/app/.env`를 테스트에 마운트하고 런타임 환경변수는 별도로 전달한다. pnpm 10.6.1 격리 workspace probe에서 `pnpm run --parallel pm2`가 각 workspace의 `pm2` 스크립트를 실행하는 것을 확인했다. 따라서 이 명령을 원인으로 추정하거나 바꾸지 않는다.
+- Docker CLI 도움말 및 명령 재현으로 기존 진단 스크립트의 오류를 확인했다. `docker exec`는 `-T` 옵션을 지원하지 않으며 `docker stats`는 `--filter`를 지원하지 않는다. 이 결함 때문에 이전 run의 PM2/포트/stats 진단은 신뢰할 수 없다.
+- 수정 대상은 `.github/ci/putduk-step10-integration.sh`와 관련 workflow path trigger다. `docker exec` 호출에서 잘못된 `-T`를 제거하고, stats 대상은 지원되는 `docker ps --filter name=...`로 run 전용 컨테이너 ID를 찾은 뒤 `docker stats` 인자로 넘기도록 한다. 진단 명령에는 timeout을 두고 PM2 프로세스별 상태/재시작 횟수/PID를 출력하되 환경값은 출력하지 않는다. 앱 시작 코드·UI·운영 Compose는 원인 확인 전 변경하지 않는다.
+- RED/GREEN 정적 회귀 확인: 수정 전 Python assertion은 두 잘못된 옵션을 모두 찾아 exit 1; 수정 후 같은 검사 통과. `bash -n`, workflow/Compose YAML 파싱, 두 Compose 파일의 test-variable 기반 `config --quiet`, `git diff --check`도 통과했다. Docker CLI에 없는 리소스를 넣어 option parsing을 확인했으며 컨테이너는 실행·삭제하지 않았다.
+- Cloud activation은 Node `22.20.0`을 제공한다. 기본 `pnpm` shim은 없는 Corepack `12.11.2`를 가리켜 실패하지만 `corepack pnpm@10.6.1`은 동작했다. Dockerfile은 컨테이너 안에서 npm으로 pnpm 10.6.1을 직접 설치하므로 이 호스트 shim 문제는 컨테이너의 4200 오류 원인이라는 증거가 없다. Cloud onboarding 설정은 변경하지 않았다.
+- 현재 통합 실행 한도는 0/3 사용. 첫 수정 push에서만 새로운 무료 `ubuntu-latest` 통합 실행을 시작하고, 성공 또는 구체적 오류에 따라 다음 수정을 결정한다.

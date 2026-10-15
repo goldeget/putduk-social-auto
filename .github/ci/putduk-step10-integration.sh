@@ -122,9 +122,9 @@ postiz_failure_diagnostics() {
     echo '### Recent Postiz healthcheck attempts (selected fields only)'
     docker inspect --format '{{.State.Health.Status}}{{range .State.Health.Log}}{{printf "\nend=%s exit=%d output=%s" .End .ExitCode .Output}}{{end}}' "$container" 2>&1 | tail -8 || true
     echo '### Postiz process names (no arguments or environment values)'
-    docker exec -T "$container" sh -c 'ps -eo pid,comm 2>/dev/null | head -40 || true' 2>&1 || true
+    timeout 10s docker exec "$container" sh -c 'ps -eo pid,comm 2>/dev/null | head -40 || true' 2>&1 || true
     echo '### PM2 app status (names/status only)'
-    docker exec -T "$container" sh -c 'pm2 jlist 2>/dev/null' > "$WORKDIR/pm2-status.json" || : > "$WORKDIR/pm2-status.json"
+    timeout 10s docker exec "$container" sh -c 'pm2 jlist 2>/dev/null' > "$WORKDIR/pm2-status.json" || : > "$WORKDIR/pm2-status.json"
     pm2_online="$(python3 - "$WORKDIR/pm2-status.json" <<'PY'
 import json, sys
 try:
@@ -134,15 +134,17 @@ except Exception:
 for app in apps:
     name = app.get('name', 'unknown')
     status = app.get('pm2_env', {}).get('status', 'unknown')
-    print(f'{name}: {status}')
+    restarts = app.get('pm2_env', {}).get('restart_time', 'unknown')
+    pid = app.get('pid', 'unknown')
+    print(f'{name}: status={status} restarts={restarts} pid={pid}')
 print('yes' if any(a.get('pm2_env', {}).get('status') == 'online' for a in apps) else 'no')
 PY
     )"
     echo "$pm2_online" | sed '$d'
     echo '### Postiz internal TCP port checks'
-    docker exec -T "$container" node -e 'const net=require("node:net");const ports=[3000,4200,5000];let left=ports.length;for(const port of ports){const s=net.createConnection({host:"127.0.0.1",port,timeout:1500});s.once("connect",()=>{console.log(`${port}: open`);s.destroy()});s.once("timeout",()=>s.destroy(new Error("timeout")));s.once("error",()=>console.log(`${port}: closed`));s.once("close",()=>{if(--left===0)process.exit(0)})}' 2>&1 || true
+    timeout 10s docker exec "$container" node -e 'const net=require("node:net");const ports=[3000,4200,5000];let left=ports.length;for(const port of ports){const s=net.createConnection({host:"127.0.0.1",port,timeout:1500});s.once("connect",()=>{console.log(`${port}: open`);s.destroy()});s.once("timeout",()=>s.destroy(new Error("timeout")));s.once("error",()=>console.log(`${port}: closed`));s.once("close",()=>{if(--left===0)process.exit(0)})}' 2>&1 || true
     echo '### Postiz Prisma startup evidence'
-    if docker exec -T "$container" sh -c 'test -x /app/node_modules/.bin/prisma' >/dev/null 2>&1; then
+    if timeout 10s docker exec "$container" sh -c 'test -x /app/node_modules/.bin/prisma' >/dev/null 2>&1; then
       echo 'Bundled Prisma CLI exists. Startup runs Prisma db push before the workspace PM2 command (shell && chain).'
     else
       echo 'Bundled Prisma CLI was not found at the expected path.'
@@ -160,8 +162,13 @@ PY
   fi
 
   echo '### All isolated service current memory/CPU (container stats only)'
-  docker stats --no-stream --format '{{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}}' \
-    --filter "name=$PROJECT" 2>&1 | head -20 || true
+  mapfile -t diagnostic_containers < <(docker ps -q --filter "name=$PROJECT" 2>/dev/null || true)
+  if ((${#diagnostic_containers[@]})); then
+    docker stats --no-stream --format '{{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}}' \
+      "${diagnostic_containers[@]}" 2>&1 | head -20 || true
+  else
+    echo 'No running run-scoped containers found.'
+  fi
 }
 
 on_error() {
@@ -195,9 +202,12 @@ touch "$STATS_FLAG"
 (
   while [[ -f "$STATS_FLAG" ]]; do
     stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' \
-      --filter "name=$PROJECT" 2>/dev/null |
-      while IFS= read -r row; do printf '%s|%s\n' "$stamp" "$row"; done >> "$STATS_FILE" || true
+    mapfile -t containers < <(docker ps -q --filter "name=$PROJECT" 2>/dev/null || true)
+    if ((${#containers[@]})); then
+      docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' \
+        "${containers[@]}" 2>/dev/null |
+        while IFS= read -r row; do printf '%s|%s\n' "$stamp" "$row"; done >> "$STATS_FILE" || true
+    fi
     sleep 5
   done
 ) &
