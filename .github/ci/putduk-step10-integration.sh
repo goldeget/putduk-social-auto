@@ -10,12 +10,14 @@ ENV_FILE="$WORKDIR/.env"
 BASE_URL='http://127.0.0.1:5500'
 IMAGE_TAG="putduk-social-auto:step10-${GITHUB_SHA:?}"
 STATS_FILE="$WORKDIR/container-stats.tsv"
+DISK_STATS_FILE="$WORKDIR/disk-stats.tsv"
 STATS_FLAG="$WORKDIR/collect-stats"
 REDACTIONS_FILE="$WORKDIR/redactions.txt"
 CURRENT_PHASE='initialization'
 
 mkdir -p "$WORKDIR/es-snapshot" "$WORKDIR/upload-snapshot" "$WORKDIR/redis-restore"
 : > "$STATS_FILE"
+: > "$DISK_STATS_FILE"
 : > "$REDACTIONS_FILE"
 chmod 700 "$WORKDIR"
 chmod 600 "$REDACTIONS_FILE"
@@ -70,7 +72,7 @@ mark_phase() {
 }
 
 resource_summary() {
-  python3 - "$STATS_FILE" <<'PY'
+  python3 - "$STATS_FILE" "$DISK_STATS_FILE" <<'PY'
 import re, sys
 from collections import defaultdict
 scales = {'B':1, 'kB':1000, 'MB':1000**2, 'GB':1000**3, 'TB':1000**4, 'KiB':1024, 'MiB':1024**2, 'GiB':1024**3, 'TiB':1024**4}
@@ -78,19 +80,38 @@ def size(s):
     m = re.fullmatch(r'([0-9.]+)\s*([A-Za-z]+)', s.strip())
     return int(float(m.group(1))*scales.get(m.group(2), 1)) if m else 0
 samples = defaultdict(lambda: [0, 0.0])
+containers = defaultdict(lambda: [0, 0.0])
 for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
     parts = line.rstrip().split('|', 3)
     if len(parts) != 4: continue
-    stamp, _, cpu, memory = parts
+    stamp, name, cpu, memory = parts
     match = re.search(r'[0-9.]+', cpu)
-    samples[stamp][0] += size(memory.split('/', 1)[0])
-    samples[stamp][1] += float(match.group()) if match else 0
+    ram = size(memory.split('/', 1)[0])
+    percent = float(match.group()) if match else 0
+    samples[stamp][0] += ram
+    samples[stamp][1] += percent
+    containers[name][0] = max(containers[name][0], ram)
+    containers[name][1] = max(containers[name][1], percent)
 if not samples:
     print('No container resource sample collected.')
 else:
     print(f"Peak sampled aggregate container RAM: {max(x[0] for x in samples.values())/1024**3:.2f} GiB")
     print(f"Peak sampled summed container CPU: {max(x[1] for x in samples.values()):.1f}%")
     print(f"Resource samples: {len(samples)}")
+    stamps = sorted(samples)
+    print(f"Sampled service uptime window: {stamps[0]} to {stamps[-1]}")
+    for name, (ram, cpu) in sorted(containers.items()):
+        print(f"Peak {name}: RAM {ram/1024**3:.2f} GiB, CPU {cpu:.1f}%")
+disk = []
+for line in open(sys.argv[2], encoding='utf-8', errors='replace'):
+    parts = line.split('|')
+    if len(parts) == 3:
+        disk.append((int(parts[1]), int(parts[2])))
+if disk:
+    print(f"Runner filesystem peak used: {max(x[0] for x in disk)/1024**3:.2f} GiB; minimum free: {min(x[1] for x in disk)/1024**3:.2f} GiB")
+    print(f"Disk samples: {len(disk)}")
+else:
+    print('No runtime disk sample collected.')
 PY
 }
 
@@ -106,7 +127,14 @@ text = re.sub(r'(?i)(password|token|authorization|cookie|secret|api[_-]?key)(\s*
 text = re.sub(r'(?i)([?&](?:token|key|secret|password)=)[^&\s]+', r'\1[REDACTED]', text)
 text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*', r'\1[REDACTED]', text)
 text = re.sub(r'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
-for line in text.splitlines()[-100:]:
+lines = text.splitlines()
+upstream = [line for line in lines if re.search(r'(?i)(connect\(\) failed|no live upstreams)', line)]
+if upstream:
+    print('Nginx upstream symptom samples (repetitive retries omitted):')
+    for line in upstream[:2]:
+        print(line[:500])
+print('Postiz and PM2 logs (repetitive Nginx upstream retries omitted):')
+for line in [line for line in lines if not re.search(r'(?i)(connect\(\) failed|no live upstreams)', line)][-100:]:
     print(line[:500])
 PY
 }
@@ -194,8 +222,16 @@ on_exit() {
     python3 - "$WORKDIR/sanitized-failure-diagnostics.txt" <<'PY'
 import re, sys
 lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()
-message = '\n'.join(line[:300] for line in lines[-35:])
-message = message[:7000]
+selected = []
+for line in lines:
+    if re.search(r'(?i)(status=|oom_killed=|restart_count=|^healthy$|^unhealthy$|^starting$|^end=.*exit=|^(frontend|backend|orchestrator):|^(3000|4200|5000):|Prisma result:|Bundled Prisma CLI|^Peak |^Sampled service|^Resource samples:|^Disk samples:|^Runner filesystem|^postiz[^| ]* cpu=|^Nginx upstream symptom samples:|^Postiz and PM2 logs:)', line):
+        selected.append(line)
+errors = [line for line in lines if re.search(r'(?i)(error|fatal|exception|uncaught|out of memory|\bERR\b|\bWARN\b)', line)
+          and not re.search(r'(?i)(connect\(\) failed|no live upstreams)', line)]
+selected.extend(errors[-12:])
+if not selected:
+    selected = lines[-20:]
+message = '\n'.join(line[:300] for line in selected[-30:])[:7000]
 message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
 print(f'::error title=Step 10 sanitized Postiz diagnostics::{message}')
 PY
@@ -214,6 +250,7 @@ touch "$STATS_FLAG"
 (
   while [[ -f "$STATS_FLAG" ]]; do
     stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    df -B1 / | awk -v stamp="$stamp" 'NR == 2 { print stamp "|" $3 "|" $4 }' >> "$DISK_STATS_FILE" || true
     mapfile -t containers < <(docker ps -q --filter "name=$PROJECT" 2>/dev/null || true)
     if ((${#containers[@]})); then
       docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' \

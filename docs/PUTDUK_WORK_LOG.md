@@ -146,4 +146,7 @@
 - Cloud activation은 Node `22.20.0`을 제공한다. 기본 `pnpm` shim은 없는 Corepack `12.11.2`를 가리켜 실패하지만 `corepack pnpm@10.6.1`은 동작했다. Dockerfile은 컨테이너 안에서 npm으로 pnpm 10.6.1을 직접 설치하므로 이 호스트 shim 문제는 컨테이너의 4200 오류 원인이라는 증거가 없다. Cloud onboarding 설정은 변경하지 않았다.
 - 현재 통합 실행 한도: 첫 실행 `38800972657` 사용 (1/3). Docker 이미지 빌드는 성공했고, 통합 단계는 53초 뒤 `start and health-check six isolated services` phase에서 exit 1; run 전용 cleanup은 성공했다. 공개 annotations에는 실패 행이 `dc up --wait`이 호출되는 line 227이라고만 나와 구체 오류는 여전히 미확인이다. 이 짧은 경과 시간은 이전에 관찰된 4분 unhealthy와 다르므로 원인을 단정하지 않는다.
 - 상세 Actions step 로그는 익명 요청에서 계속 읽을 수 없었다. 첫 실행 진단 수정에 남아 있는 접근성 공백을 해결하기 위해, 다음 진단은 마스킹된 제한 출력만 job summary와 GitHub error annotation에도 남기도록 추가한다. 수정된 비밀값 필터 fixture, 셸/YAML 파싱, `git diff --check`가 통과했다.
-- 남은 실행 허용량: 2회. 다음 실행 결과에서 Postiz 실제 PM2/Next 오류를 확인하기 전까지 앱 시작 명령이나 애플리케이션 코드는 변경하지 않는다.
+- 두 번째 실행 `38802419300` (2/3)에서 이미지 빌드는 성공했으며 integration phase는 4분 58초 후 실패, test-only cleanup은 성공했다. Redacted annotation에서 Nginx가 `localhost:4200`의 live upstream을 찾지 못하고 `127.0.0.1:4200`에 connection refused를 반복하는 로그를 확인했다. 이는 프런트엔드 서버가 포트를 열지 않은 현상을 재확인하지만, annotation에 마지막 Nginx 재시도들이 우선 노출돼 PM2 상태와 Next의 최초 종료 오류는 여전히 가려져 있다.
+- 세 번째/마지막 허용 실행 전 진단 annotation 구성을 수정한다. PM2 이름·상태·재시작 수·PID, 3000/4200/5000 연결 결과, Prisma 상태, OOM/RAM 정보를 선택 우선 포함하고 반복 Nginx 오류는 최대 두 예시만 표시한다. 일반 프런트엔드 오류·예외 로그는 비밀값 필터 뒤 제한해 포함한다.
+- 세 번째 실행용 최종 보강: 진단 선택 결과에 컨테이너별 peak RAM/CPU 및 실행기 파일시스템의 peak 사용량/min free, 샘플 기간을 포함한다. `bash -n`, 3개 YAML 파싱, `git diff --check`, 잘못된 `docker exec -T`/`docker stats --filter` 부재 검증은 통과했다.
+- 다음 실행이 완료되기 전까지 앱 코드나 실행 경로는 추측으로 바꾸지 않는다. 마지막 실행 후에도 root cause가 드러나지 않으면 미검증 항목과 사용자에게 필요한 상세 로그 접근만 보고한다.
