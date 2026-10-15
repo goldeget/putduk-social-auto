@@ -5,6 +5,9 @@ dist
 tmp
 /out-tsc
 .env
+.env.production
+.env.production.local
+.env.*.local
 .apple
 # dependencies
 node_modules
