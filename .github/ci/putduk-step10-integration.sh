@@ -11,10 +11,14 @@ BASE_URL='http://127.0.0.1:5500'
 IMAGE_TAG="putduk-social-auto:step10-${GITHUB_SHA:?}"
 STATS_FILE="$WORKDIR/container-stats.tsv"
 STATS_FLAG="$WORKDIR/collect-stats"
+REDACTIONS_FILE="$WORKDIR/redactions.txt"
+CURRENT_PHASE='initialization'
 
 mkdir -p "$WORKDIR/es-snapshot" "$WORKDIR/upload-snapshot" "$WORKDIR/redis-restore"
 : > "$STATS_FILE"
+: > "$REDACTIONS_FILE"
 chmod 700 "$WORKDIR"
+chmod 600 "$REDACTIONS_FILE"
 # Elasticsearch runs as UID 1000 inside this isolated runner container.
 chmod 777 "$WORKDIR/es-snapshot"
 umask 077
@@ -25,6 +29,7 @@ TEMPORAL_DB_PASSWORD="$(openssl rand -hex 32)"
 JWT_SECRET="$(openssl rand -hex 48)"
 for secret in "$POSTIZ_DB_PASSWORD" "$REDIS_PASSWORD" "$TEMPORAL_DB_PASSWORD" "$JWT_SECRET"; do
   printf '::add-mask::%s\n' "$secret"
+  printf '%s\n' "$secret" >> "$REDACTIONS_FILE"
 done
 
 cat > "$ENV_FILE" <<EOF
@@ -59,6 +64,11 @@ stop_sampler() {
   if [[ -n "${STATS_PID:-}" ]]; then wait "$STATS_PID" 2>/dev/null || true; fi
 }
 
+mark_phase() {
+  CURRENT_PHASE="$1"
+  printf 'Step 10 phase: %s\n' "$CURRENT_PHASE"
+}
+
 resource_summary() {
   python3 - "$STATS_FILE" <<'PY'
 import re, sys
@@ -84,19 +94,44 @@ else:
 PY
 }
 
+on_error() {
+  local status=$?
+  local line="${BASH_LINENO[0]:-unknown}"
+  printf '::error::Step 10 command failed at script line %s (phase: %s; exit: %s).\n' \
+    "$line" "$CURRENT_PHASE" "$status" >&2
+  return "$status"
+}
+
 on_exit() {
   local status=$?
   stop_sampler
   resource_summary
   if (( status != 0 )); then
+    dc logs --no-color --since=45m --tail=300 > "$WORKDIR/failure-service-logs.txt" 2>&1 || true
+    python3 - "$WORKDIR/failure-service-logs.txt" "$REDACTIONS_FILE" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+secrets = [line.rstrip('\n') for line in open(sys.argv[2], encoding='utf-8') if line.strip()]
+for secret in sorted(secrets, key=len, reverse=True):
+    text = text.replace(secret, '[REDACTED]')
+text = re.sub(r'(?i)(password|token|authorization|cookie|jwt_secret)(\s*[:=]\s*)[^\s,;]+', r'\1\2[REDACTED]', text)
+text = re.sub(r'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
+print('Sanitized final service log lines (at most 80; generated credentials redacted):')
+for line in text.splitlines()[-80:]:
+    print(line[:500])
+PY
+    printf '\n### PUTDUK Step 10 diagnostic\n\n- Failed phase: %s\n- Script line and exit status are annotated in this job.\n- Raw service logs and test credentials are not included here.\n' \
+      "$CURRENT_PHASE" >> "$GITHUB_STEP_SUMMARY"
     echo 'Step 10 stopped on a failed assertion or service command.' >&2
     echo 'Raw service logs are withheld from the public Actions log.' >&2
   fi
   exit "$status"
 }
+trap on_error ERR
 trap on_exit EXIT
 
 dc config --quiet
+mark_phase 'start and health-check six isolated services'
 touch "$STATS_FLAG"
 (
   while [[ -f "$STATS_FLAG" ]]; do
@@ -127,6 +162,7 @@ for service in postiz-postgres postiz-redis temporal-postgresql temporal-elastic
 done
 echo 'All six required services healthy; Caddy and internal service host ports are not exposed.'
 
+mark_phase 'login page, synthetic registration, and authenticated dashboard'
 http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/login.html" -w '%{http_code}' "$BASE_URL/auth/login")"
 [[ "$http" == 200 ]] || { echo "Login page returned HTTP $http." >&2; exit 1; }
 echo 'Login page: HTTP 200.'
@@ -134,6 +170,7 @@ echo 'Login page: HTTP 200.'
 TEST_EMAIL="putduk-step10-${GITHUB_RUN_ID}@example.invalid"
 TEST_PASSWORD="$(openssl rand -hex 24)"
 printf '::add-mask::%s\n' "$TEST_PASSWORD"
+printf '%s\n' "$TEST_PASSWORD" >> "$REDACTIONS_FILE"
 export TEST_EMAIL TEST_PASSWORD
 python3 - "$WORKDIR/register.json" <<'PY'
 import json, os, sys
@@ -187,6 +224,7 @@ INTEGRATION_ID="$(dc exec -T -e TEST_ORG_ID="$TEST_ORG_ID" -e TEST_USER_ID="$TES
 [[ -n "$INTEGRATION_ID" ]]
 echo 'Test account registered/logged in; authenticated dashboard and organization administrator role verified.'
 
+mark_phase 'create and read a Postiz draft'
 write_post_payload() {
   local output="$1" kind="$2" date="$3" image_text="$4" settings_text="$5" content="$6"
   python3 - "$output" "$kind" "$date" "$image_text" "$settings_text" "$content" "$INTEGRATION_ID" <<'PY'
@@ -223,6 +261,7 @@ if not r.get('posts') or r['posts'][0].get('state') != 'DRAFT': raise SystemExit
 PY
 echo 'Postiz draft creation/read-back passed.'
 
+mark_phase 'upload fake image, schedule post, and verify Temporal timer'
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=' | base64 -d > "$WORKDIR/test.png"
 http="$(curl --silent --show-error --max-time 60 -o "$WORKDIR/upload.json" \
   -b "$WORKDIR/cookies.txt" -F "file=@$WORKDIR/test.png;type=image/png" \
@@ -272,6 +311,7 @@ for attempt in $(seq 1 45); do
 done
 echo 'Image-backed schedule and Temporal timer passed; publish date is 30 days away.'
 
+mark_phase 'restart Postiz and Temporal and verify scheduled state'
 echo 'Restarting Postiz and Temporal; checking that the post and timer survive.'
 dc restart postiz temporal >/dev/null
 dc up -d --wait --wait-timeout 900 postiz temporal >/dev/null
@@ -290,6 +330,7 @@ if ! dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID"
 fi
 echo 'Postiz scheduled record and Temporal timer survived restart.'
 
+mark_phase 'backup and restore Postiz PostgreSQL data'
 echo 'Backing up and restoring the live Postiz test database into a separate database.'
 dc exec -T postiz-postgres sh -ec 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$WORKDIR/postiz.dump"
 [[ -s "$WORKDIR/postiz.dump" ]]
@@ -310,6 +351,7 @@ SQL
 [[ "$restored_draft" == 'DRAFT' ]]
 echo 'Postiz DB dump restored; both draft and scheduled post states verified.'
 
+mark_phase 'backup and restore Temporal PostgreSQL history'
 echo 'Backing up and restoring Temporal execution history into a separate database.'
 temporal_count="$(dc exec -T -e TEST_WORKFLOW_ID="$WORKFLOW_ID" temporal-postgresql sh -ec \
   'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -v workflow_id="$TEST_WORKFLOW_ID" -U "$POSTGRES_USER" -d temporal -At' <<'SQL'
@@ -330,6 +372,7 @@ SQL
 [[ "$restored_temporal_count" =~ ^[1-9][0-9]*$ ]]
 echo 'Temporal PostgreSQL dump restored; scheduled workflow execution row is present.'
 
+mark_phase 'verify Redis AOF restart and RDB restore'
 echo 'Checking Redis AOF restart persistence and independent RDB backup restore.'
 REDIS_TEST_KEY="putduk:step10:${GITHUB_RUN_ID}"
 REDIS_TEST_VALUE="ci-only-${GITHUB_RUN_ATTEMPT}"
@@ -353,6 +396,7 @@ docker run -d --name "$redis_restore" --label "putduk.step10.project=$PROJECT" -
 [[ "$(docker exec "$redis_restore" redis-cli --raw GET "$REDIS_TEST_KEY")" == "$REDIS_TEST_VALUE" ]]
 echo 'Redis AOF survived restart and RDB backup restored in an isolated Redis container.'
 
+mark_phase 'backup and restore uploaded file'
 echo 'Backing up and restoring the uploaded test image volume.'
 postiz_container="$(dc ps -q postiz)"
 upload_volume="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/uploads"}}{{.Name}}{{end}}{{end}}' "$postiz_container")"
@@ -369,6 +413,7 @@ restored_hash="$(docker run --rm --network none -v "$upload_restore_volume:/uplo
 [[ "$source_hash" == "$restored_hash" ]]
 echo 'Uploaded-image volume backup restored; SHA-256 matched.'
 
+mark_phase 'snapshot and restore Temporal Elasticsearch'
 echo 'Creating a Temporal Elasticsearch snapshot and restoring it into an isolated cluster.'
 repo_response="$(dc exec -T temporal-elasticsearch curl -fsS -X PUT -H 'Content-Type: application/json' \
   -d '{"type":"fs","settings":{"location":"/usr/share/elasticsearch/step10-snapshots/repository","compress":true}}' \
@@ -414,6 +459,7 @@ restored_indices="$(docker exec "$es_restore" curl -fsS 'http://127.0.0.1:9200/_
 [[ "$restored_indices" =~ ^[1-9][0-9]*$ ]]
 echo "Elasticsearch snapshot restored; index count: $restored_indices."
 
+mark_phase 'scan service logs and report resource samples'
 dc logs --no-color --since=45m --tail=10000 > "$WORKDIR/service-logs.txt" 2>&1 || true
 serious_errors="$(python3 - "$WORKDIR/service-logs.txt" <<'PY'
 import re, sys
