@@ -225,6 +225,7 @@ jobs:
       - name: Run isolated Step 10 integration checks
         if: success()
         shell: bash
+        # Step 10-A diagnostic run: collect Postiz-specific unhealthy details.
         run: bash .github/ci/putduk-step10-integration.sh
 
       - name: Clean up only this Step 10 run

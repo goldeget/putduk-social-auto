@@ -122,3 +122,13 @@
 - 진단 스크립트/기록 커밋 `19311644883ffc079dd7c8fc334ea80a009ad076`은 자동 실행 경로 필터가 워크플로 파일만 감시하므로 새 Action을 시작하지 않았다. 해당 필터를 넓히지 않고 진단 목적을 주석으로 명시한 커밋 `e320c68b3d9aa65caecd3d611e54b30fe5b437ad`에서 한 번 실행했다.
 - 진단 run `38789744025` (`e320c68b3d9aa65caecd3d611e54b30fe5b437ad`, 15분 17초)도 실패했다. 이미지 빌드, 이미지 메타데이터/비밀정보 검사, 디스크 사전 점검은 성공했다. 통합 스크립트는 57행의 `docker compose` 호출 중 `start and health-check six isolated services` 단계에서 exit 1을 받았고, run 전용 자원 정리는 성공했다. 실패한 컨테이너의 상세 로그는 로그인된 Actions 체크 화면을 요구해 이 실행 환경에서는 확인할 수 없었다. 관리자 로그인·콘텐츠·예약·Temporal workflow·복구는 여전히 검증되지 않았다.
 - 반복 실행은 여기서 중단한다. 다음에는 사용자가 해당 run의 실패한 “Run isolated Step 10 integration checks” 로그에서 비밀값을 가린 서비스 오류를 확인하고 공유해야, 앱 변경 승인 없이 테스트 설정만 고칠 수 있는지 판단할 수 있다. 앱 코드 변경이 필요하다면 별도 승인을 기다린다.
+
+## 10-A단계 — Postiz healthcheck 실패 진단 보완 (2026-10-15)
+
+- 시작 확인: `goldeget/putduk-social-auto`, 브랜치 `work`; 로컬 SHA와 `git ls-remote origin refs/heads/work` 결과가 모두 `d7cb01c3e450d46886e948cb4a056dafaefcc93d`; 시작 시 작업 트리는 깨끗했다.
+- 두 앞선 Actions 실행의 결과에서 Postiz 단독 unhealthy와 약 4분 뒤 health 판정을 확인했지만, 현재 저장된 로그에는 앱 컨테이너 오류가 없어 정확한 근본 원인은 미확정이다.
+- 소스 경로 확인: Dockerfile은 `nginx && pnpm run pm2`; 루트 `pm2-run`은 Prisma DB push 후 workspace PM2를 실행한다. 테스트 override는 이미지 내 Prisma CLI로 `pnpm exec prisma db push`를 실행해 `pnpm dlx`의 런타임 다운로드를 피한다. PM2 workspace 항목은 frontend(4200), backend(3000), orchestrator이며 Nginx는 5000에서 프록시한다. Compose healthcheck는 컨테이너 내부 `127.0.0.1:5000`의 HTTP 상태가 500 미만인지 검사한다. 테스트 컨테이너에는 4 GiB 메모리 제한이 있다.
+- 진단 전용 수정: 실패 시 run 전용 cleanup보다 먼저 Postiz 상태/종료/OOM/재시작 수, 최근 healthcheck 기록, Postiz 전용 시작 로그, 프로세스와 PM2 앱 상태, 포트 3000/4200/5000, Prisma 실행 단서, 컨테이너별 CPU/RAM을 수집하도록 `.github/ci/putduk-step10-integration.sh`를 보완했다. 공개 출력에서는 생성된 비밀값, DB/Redis URL, 토큰·쿠키·JWT 등을 가린다. 앱 코드, 운영 Compose, 개발 Compose는 수정하지 않았다.
+- `.github/workflows/putduk-docker-build-check.yml`의 주석만 변경해 경로 필터에 따라 격리 진단 실행 1회를 트리거한다. 무료 `ubuntu-latest`와 `contents: read`, 로컬 이미지 빌드만 유지하며 이미지 push는 없다.
+- 정적 검사 통과: 통합 스크립트 `bash -n`, `git diff --check`. GitHub Actions 진단 실행 및 결과는 푸시 후 기록한다.
+- 다음: 정확한 Postiz 오류가 확인되면 추가 개발을 멈추고 원인과 필요한 최소 조치만 보고한다. 앱 코드 수정이 필요하면 사용자 승인을 먼저 받는다.

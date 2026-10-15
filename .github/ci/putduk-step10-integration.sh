@@ -94,6 +94,76 @@ else:
 PY
 }
 
+sanitize_log() {
+  python3 - "$1" "$REDACTIONS_FILE" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+secrets = [line.rstrip('\n') for line in open(sys.argv[2], encoding='utf-8') if line.strip()]
+for secret in sorted(secrets, key=len, reverse=True):
+    text = text.replace(secret, '[REDACTED]')
+text = re.sub(r'(?i)\b(?:postgres(?:ql)?|redis)://[^\s\"\'<>]+', '[REDACTED_CONNECTION_URL]', text)
+text = re.sub(r'(?i)(password|token|authorization|cookie|jwt_secret|client_secret|api[_-]?key)(\s*[:=]\s*)[^\s,;]+', r'\1\2[REDACTED]', text)
+text = re.sub(r'(?i)([?&](?:token|key|secret|password)=)[^&\s]+', r'\1[REDACTED]', text)
+text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*', r'\1[REDACTED]', text)
+text = re.sub(r'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
+for line in text.splitlines()[-100:]:
+    print(line[:500])
+PY
+}
+
+postiz_failure_diagnostics() {
+  echo '### Postiz container state (selected fields only)'
+  local container
+  container="$(dc ps -q postiz 2>/dev/null || true)"
+  if [[ -z "$container" ]]; then
+    echo 'Postiz container ID unavailable; it may have failed before creation.'
+  else
+    docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restart_count={{.RestartCount}}' "$container" 2>&1 || true
+    echo '### Recent Postiz healthcheck attempts (selected fields only)'
+    docker inspect --format '{{.State.Health.Status}}{{range .State.Health.Log}}{{printf "\nend=%s exit=%d output=%s" .End .ExitCode .Output}}{{end}}' "$container" 2>&1 | tail -8 || true
+    echo '### Postiz process names (no arguments or environment values)'
+    docker exec -T "$container" sh -c 'ps -eo pid,comm 2>/dev/null | head -40 || true' 2>&1 || true
+    echo '### PM2 app status (names/status only)'
+    docker exec -T "$container" sh -c 'pm2 jlist 2>/dev/null' > "$WORKDIR/pm2-status.json" || : > "$WORKDIR/pm2-status.json"
+    pm2_online="$(python3 - "$WORKDIR/pm2-status.json" <<'PY'
+import json, sys
+try:
+    apps = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    apps = []
+for app in apps:
+    name = app.get('name', 'unknown')
+    status = app.get('pm2_env', {}).get('status', 'unknown')
+    print(f'{name}: {status}')
+print('yes' if any(a.get('pm2_env', {}).get('status') == 'online' for a in apps) else 'no')
+PY
+    )"
+    echo "$pm2_online" | sed '$d'
+    echo '### Postiz internal TCP port checks'
+    docker exec -T "$container" node -e 'const net=require("node:net");const ports=[3000,4200,5000];let left=ports.length;for(const port of ports){const s=net.createConnection({host:"127.0.0.1",port,timeout:1500});s.once("connect",()=>{console.log(`${port}: open`);s.destroy()});s.once("timeout",()=>s.destroy(new Error("timeout")));s.once("error",()=>console.log(`${port}: closed`));s.once("close",()=>{if(--left===0)process.exit(0)})}' 2>&1 || true
+    echo '### Postiz Prisma startup evidence'
+    if docker exec -T "$container" sh -c 'test -x /app/node_modules/.bin/prisma' >/dev/null 2>&1; then
+      echo 'Bundled Prisma CLI exists. Startup runs Prisma db push before the workspace PM2 command (shell && chain).'
+    else
+      echo 'Bundled Prisma CLI was not found at the expected path.'
+    fi
+    echo '### Postiz-only startup and error logs (sanitized; up to 100 lines)'
+    dc logs --no-color --since=45m --tail=500 postiz > "$WORKDIR/postiz-failure-logs.txt" 2>&1 || true
+    sanitize_log "$WORKDIR/postiz-failure-logs.txt"
+    if grep -Eiq 'database is now in sync|already in sync' "$WORKDIR/postiz-failure-logs.txt"; then
+      echo 'Prisma result: success message is present in Postiz logs.'
+    elif [[ "$(echo "$pm2_online" | tail -n 1)" == yes ]]; then
+      echo 'Prisma result: app process is online; startup shell executes Prisma db push before PM2 (&& chain), so db push completed.'
+    else
+      echo 'Prisma result: no successful marker or online PM2 process found; inspect the Postiz-only logs above.'
+    fi
+  fi
+
+  echo '### All isolated service current memory/CPU (container stats only)'
+  docker stats --no-stream --format '{{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}}' \
+    --filter "name=$PROJECT" 2>&1 | head -20 || true
+}
+
 on_error() {
   local status=$?
   local line="${BASH_LINENO[0]:-unknown}"
@@ -105,26 +175,15 @@ on_error() {
 on_exit() {
   local status=$?
   stop_sampler
-  resource_summary
   if (( status != 0 )); then
-    dc logs --no-color --since=45m --tail=300 > "$WORKDIR/failure-service-logs.txt" 2>&1 || true
-    python3 - "$WORKDIR/failure-service-logs.txt" "$REDACTIONS_FILE" <<'PY'
-import re, sys
-text = open(sys.argv[1], encoding='utf-8', errors='replace').read()
-secrets = [line.rstrip('\n') for line in open(sys.argv[2], encoding='utf-8') if line.strip()]
-for secret in sorted(secrets, key=len, reverse=True):
-    text = text.replace(secret, '[REDACTED]')
-text = re.sub(r'(?i)(password|token|authorization|cookie|jwt_secret)(\s*[:=]\s*)[^\s,;]+', r'\1\2[REDACTED]', text)
-text = re.sub(r'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
-print('Sanitized final service log lines (at most 80; generated credentials redacted):')
-for line in text.splitlines()[-80:]:
-    print(line[:500])
-PY
+    echo '### Failure diagnostics collected before the workflow cleanup step'
+    postiz_failure_diagnostics
     printf '\n### PUTDUK Step 10 diagnostic\n\n- Failed phase: %s\n- Script line and exit status are annotated in this job.\n- Raw service logs and test credentials are not included here.\n' \
       "$CURRENT_PHASE" >> "$GITHUB_STEP_SUMMARY"
     echo 'Step 10 stopped on a failed assertion or service command.' >&2
     echo 'Raw service logs are withheld from the public Actions log.' >&2
   fi
+  resource_summary
   exit "$status"
 }
 trap on_error ERR
