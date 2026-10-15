@@ -93,3 +93,14 @@
 - 기존 `.github/workflows/build.yml`은 모든 push, pull request, merge group에서 기존 전체 빌드 스크립트를 실행한다. 따라서 `work` push는 이 기존 일반 빌드도 트리거한다. `build-containers.yml`은 수동 실행 또는 tag push에서만 실행되므로 이번 branch push는 기존 GHCR 이미지 게시 workflow를 트리거하지 않는다. 새 workflow는 요청대로 자체 파일 경로만 감시한다. 다른 기존 예약·수동 workflow 및 그 비밀값은 변경·사용하지 않았다.
 - 현재 단계에 새 workflow 파일의 자동 실행 여부와 run URL/로그를 확인할 GitHub API 접근이 없어 실제 Actions run은 확인 대기 상태다. 따라서 Google Fonts 문제 해결, 실제 GitHub-hosted 프런트엔드 빌드, 실제 runner CPU/RAM/디스크, 공개된 run URL은 미검증이다. Docker 전체 빌드·이미지 생성은 실행하지 않았다.
 - 실제 Actions run 결과를 확인한 뒤에만 Google Fonts 오류 해결 여부를 판정한다. Actions 비활성 또는 결제 설정 변경이 필요하면 사용자에게 요청한다. 이후 Docker 빌드 검토는 별도 승인 전 진행하지 않는다.
+
+## 9단계 — GitHub Actions 로컬 Docker 이미지 빌드 검증 (2026-10-15)
+
+- 작업 시작 시 저장소 `goldeget/putduk-social-auto`, 브랜치 `work`, 로컬·원격 SHA `5e5ac0d2431854796f191615792d91510f2527d0` 일치와 깨끗한 작업 트리를 확인했다. 기존 작업 기록도 읽었다.
+- 새 `.github/workflows/putduk-docker-build-check.yml`은 `work`에서 이 파일이 변경된 push만 감지한다. `ubuntu-latest`, 60분 제한, `contents: read`, checkout 자격증명 미보존을 설정했다. GHCR/다른 레지스트리 로그인·게시 단계는 없다.
+- 워크플로는 작업 공간과 Docker 데이터 저장 경로의 디스크를 각각 측정하며 둘 중 하나라도 35 GiB 미만이면 Docker 빌드 전에 중단한다. 기존 Docker/컨테이너/볼륨을 정리하지 않는다. 충분한 경우 `Dockerfile.dev`로 `linux/amd64` 이미지를 실행기 로컬에만 `--load`하고, OCI revision label과 빌드 인자를 실제 `GITHUB_SHA`로 설정한다.
+- 성공 시 이미지 ID/크기/OS·아키텍처/revision, 기본 Entrypoint/Cmd/사용자/노출 포트 및 비밀정보와 유사한 환경 변수명(값은 출력하지 않음)을 검사한다. 격리된 `--network none` 컨테이너에서 앱을 시작하지 않고 이미지 파일의 실제 환경 파일/일부 고신뢰 토큰 패턴을 점검하도록 했다. 이는 포괄적인 비밀정보 감사는 아니다.
+- 로컬 정적 검증: YAML 파싱, 트리거·권한·실행기·제한시간·로컬 빌드 및 게시 금지 조건 assertion, 인라인 JavaScript 문법, 셸 문법, 추적된 환경/자격증명 파일 검사 및 `git diff --check` 통과. 추적된 비밀 파일은 발견되지 않았다.
+- 이 기록 시점에 GitHub-hosted Actions 실행, runner의 실제 디스크/RAM/CPU, Google Fonts를 포함한 Docker 이미지 생성, 이미지 ID/크기/아키텍처/revision, 이미지 내 비밀정보 검색은 아직 검증되지 않았다. 실제 Actions 실행 결과 확인 전에는 이미지 빌드 성공으로 보고하지 않는다.
+- 기존 `.github/workflows/build.yml`은 push마다 별도 실행될 수 있으나 컨테이너 게시 workflow는 수정하거나 수동 실행하지 않았다. 기존 upstream GHCR 게시 workflow를 실행하지 않는다.
+- 다음: 이 워크플로와 작업 기록만 `work`에 커밋·푸시한 뒤 원격 SHA를 검증하고, Actions 실행 결과가 조회 가능한지 확인한다. 실행 결과의 디스크 사전검사 실패 또는 빌드 실패는 성공으로 표시하지 않는다.

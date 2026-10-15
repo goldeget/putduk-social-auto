@@ -1,0 +1,219 @@
+name: PUTDUK Docker Build Check
+
+on:
+  push:
+    branches:
+      - work
+    paths:
+      - .github/workflows/putduk-docker-build-check.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: putduk-docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-local-image:
+    if: github.ref == 'refs/heads/work'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source without persisting credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Record runner resources before build
+        run: |
+          set -euo pipefail
+          echo "CPU cores: $(nproc)"
+          echo "CPU load: $(cat /proc/loadavg)"
+          echo 'Memory:'
+          free -h
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          echo "Workspace and Docker data disk (Docker root: $docker_root):"
+          df -h "$GITHUB_WORKSPACE" "$docker_root"
+          echo "Docker: $(docker --version)"
+
+      - name: Reject tracked runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A fresh checkout has no ignored local files. Fail closed if an actual
+          # environment/credential file has accidentally been committed.
+          if git ls-files -z | python3 -c '
+          import sys
+          paths = [p.decode() for p in sys.stdin.buffer.read().split(b"\0") if p]
+          blocked = [p for p in paths if (
+              p.rsplit("/", 1)[-1].startswith(".env")
+              or p.endswith((".pem", ".key"))
+          ) and not p.endswith((".example", ".sample", ".template"))]
+          for path in blocked:
+              print(path)
+          raise SystemExit(bool(blocked))
+          '; then
+            echo 'Tracked runtime secret file check passed.'
+          else
+            echo 'A tracked runtime secret file was found; stopping before Docker build.' >&2
+            exit 1
+          fi
+
+      - name: Check available disk before Buildx setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_kib=$((35 * 1024 * 1024))
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          for location in "$GITHUB_WORKSPACE" "$docker_root"; do
+            available_kib="$(df -Pk "$location" | awk 'END {print $4}')"
+            echo "$location available: $((available_kib / 1024 / 1024)) GiB"
+            if (( available_kib < required_kib )); then
+              echo "Insufficient free disk at $location for a safe image build; stopping without building or cleaning runner data." >&2
+              exit 1
+            fi
+          done
+          echo 'Required free disk at both locations: 35 GiB'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Recheck disk before Docker build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CPU cores: $(nproc)"
+          echo "CPU load: $(cat /proc/loadavg)"
+          echo 'Memory:'
+          free -h
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          echo "Workspace and Docker data disk (Docker root: $docker_root):"
+          df -h "$GITHUB_WORKSPACE" "$docker_root"
+          for location in "$GITHUB_WORKSPACE" "$docker_root"; do
+            available_kib="$(df -Pk "$location" | awk 'END {print $4}')"
+            if (( available_kib < 35 * 1024 * 1024 )); then
+              echo "Free disk at $location fell below the 35 GiB safety threshold; stopping before image build." >&2
+              exit 1
+            fi
+          done
+
+      - name: Build local linux/amd64 image
+        id: image-build
+        shell: bash
+        env:
+          IMAGE_TAG: putduk-social-auto:step9-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          started="$(date +%s)"
+          echo "started_epoch=$started" >> "$GITHUB_OUTPUT"
+          set +e
+          docker buildx build \
+            --load \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --build-arg "NEXT_PUBLIC_VERSION=$GITHUB_SHA" \
+            --tag "$IMAGE_TAG" \
+            --file Dockerfile.dev \
+            .
+          result=$?
+          set -e
+          finished="$(date +%s)"
+          echo "duration_seconds=$((finished - started))" >> "$GITHUB_OUTPUT"
+          exit "$result"
+
+      - name: Inspect and validate local image
+        if: success()
+        shell: bash
+        env:
+          IMAGE_TAG: putduk-social-auto:step9-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker image inspect "$IMAGE_TAG" > "$RUNNER_TEMP/putduk-image-inspect.json"
+          python3 - "$RUNNER_TEMP/putduk-image-inspect.json" "$GITHUB_SHA" <<'PY'
+          import json
+          import re
+          import sys
+
+          image = json.load(open(sys.argv[1], encoding="utf-8"))[0]
+          expected_revision = sys.argv[2]
+          config = image.get("Config") or {}
+          labels = config.get("Labels") or {}
+          revision = labels.get("org.opencontainers.image.revision")
+          if image.get("Os") != "linux" or image.get("Architecture") != "amd64":
+              raise SystemExit("Image platform check failed")
+          if revision != expected_revision:
+              raise SystemExit("OCI revision label does not match GITHUB_SHA")
+          image_id = image.get("Id", "")
+          if not image_id:
+              raise SystemExit("Image ID is missing")
+          risky = re.compile(r"(SECRET|TOKEN|PASSWORD|API[_-]?KEY|CLIENT[_-]?SECRET|DATABASE_URL|PRIVATE_KEY)", re.I)
+          env_names = []
+          for item in config.get("Env") or []:
+              name = item.split("=", 1)[0]
+              if risky.search(name):
+                  env_names.append(name)
+          print(f"Image ID: {image_id}")
+          print(f"Image size: {image.get('Size', 0)} bytes")
+          print(f"Platform: {image.get('Os')}/{image.get('Architecture')}")
+          print(f"OCI revision: {revision}")
+          print(f"Entrypoint: {json.dumps(config.get('Entrypoint'))}")
+          print(f"Default command: {json.dumps(config.get('Cmd'))}")
+          print(f"Configured user: {config.get('User') or '(image default)'}")
+          print(f"Exposed ports: {json.dumps(config.get('ExposedPorts') or {})}")
+          print(f"Environment variable names matching secret-like terms: {env_names or '(none)'}")
+          if env_names:
+              raise SystemExit("Secret-like environment variable is configured in image metadata")
+          PY
+
+      - name: Scan image files for credential artifacts
+        if: success()
+        env:
+          IMAGE_TAG: putduk-social-auto:step9-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --entrypoint node "$IMAGE_TAG" -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const roots = ["/app"];
+            const secretFile = /(^|\/)\.env(?:$|\..+)$/;
+            const secretPattern = /gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]+|sk_(?:live|test)_[A-Za-z0-9]{16,}/;
+            const extensions = new Set([".js", ".cjs", ".mjs", ".json", ".html", ".css", ".ts", ".tsx", ".yaml", ".yml", ".map"]);
+            const findings = [];
+            function walk(dir) {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const file = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  if (entry.name !== "node_modules" && entry.name !== ".git") walk(file);
+                } else if (entry.isFile()) {
+                  if (secretFile.test(file) && !/\.(?:example|sample|template)$/.test(file)) findings.push(file);
+                  if (extensions.has(path.extname(file))) {
+                    const stat = fs.statSync(file);
+                    if (stat.size <= 8 * 1024 * 1024 && secretPattern.test(fs.readFileSync(file, "utf8"))) findings.push(file);
+                  }
+                }
+              }
+            }
+            for (const root of roots) walk(root);
+            if (findings.length) {
+              for (const file of [...new Set(findings)]) console.error(`Potential credential artifact: ${file}`);
+              process.exit(1);
+            }
+            console.log("No checked credential artifacts or known token patterns found.");
+          '
+
+      - name: Record runner resources after build
+        if: always()
+        run: |
+          echo "CPU cores: $(nproc)"
+          echo "CPU load: $(cat /proc/loadavg)"
+          echo 'Memory:'
+          free -h
+          docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+          echo "Workspace disk; Docker root: ${docker_root:-unknown}"
+          if [ -n "$docker_root" ]; then df -h "$GITHUB_WORKSPACE" "$docker_root"; else df -h "$GITHUB_WORKSPACE"; fi
+          echo "Build duration seconds: ${{ steps.image-build.outputs.duration_seconds || 'not completed' }}"
