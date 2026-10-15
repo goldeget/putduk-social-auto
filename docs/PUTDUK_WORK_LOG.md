@@ -106,3 +106,15 @@
 - 워크플로와 이 기록을 `work`에 커밋·푸시했다. 첫 푸시의 로컬·원격 SHA는 `f8b2e03605343d2d1bed6fa8af4e92cc7cbf9470`으로 일치했다. 해당 SHA가 Action의 예상 소스 커밋이다.
 - 실행 결과 확인을 위해 공개 GitHub Actions API를 조회했으나 현재 실행 환경의 프록시가 HTTP 403을 반환했다. 따라서 실제 run ID/URL, 상태, 디스크 사전검사, Docker 이미지 생성 및 검사 결과는 여전히 확인되지 않았다. Action 실행 성공으로 간주하지 않는다.
 - 다음: 사용자가 Actions 화면에서 해당 커밋 `f8b2e03605343d2d1bed6fa8af4e92cc7cbf9470`의 `PUTDUK Docker Build Check` 결과를 확인한다. 디스크 사전검사 실패 또는 빌드 실패는 성공으로 표시하지 않는다.
+
+## 10단계 — GitHub Actions 격리 전체 실행 및 복구 검사 (2026-10-15)
+
+- 시작 기준은 저장소 `goldeget/putduk-social-auto`, 브랜치 `work`, 로컬 HEAD `1eaaecd8da689d6ab0dc478ffe2212a9e22f6af8`이었다. GitHub `origin/work`도 `git ls-remote`로 같은 SHA임을 확인했다. 별도 origin 추적 ref는 체크아웃에 없었으므로 원격 상태 조회 결과를 직접 확인했다. `main`은 읽기만 했다.
+- 기존 9단계 워크플로의 로컬 `linux/amd64` 빌드를 같은 실행에서 한 번만 하고, 그 이미지로 격리 통합검사를 이어가도록 확장했다. 이미지 push, GHCR 권한, Release, 서버 배포 단계는 없다. 일반 `ubuntu-latest`, `contents: read`, checkout 자격증명 미보존, 120분 timeout을 유지한다. 50 GiB 미만이면 빌드 전 중단하고, 이미지 빌드 뒤 20 GiB 미만이면 서비스 다운로드/기동 전에 중단한다. Docker 전역 prune은 없다.
+- 새 `.github/ci/docker-compose.step10-test.yaml`은 테스트 전용 override다. `.github`가 기존 `.dockerignore`에서 제외돼 테스트 설정이 운영 이미지 빌드 컨텍스트에 복사되지 않는다. Caddy를 제외하고 Postiz 포트는 `127.0.0.1:5500`만 열며 앱 네트워크의 외부 송신을 막는다. 이 테스트 전용 시작 명령은 이미지에 포함된 Prisma 6.5.0을 사용해 외부 `pnpm dlx` 다운로드 없이 DB schema push를 실행한 다음 기존 PM2 앱들을 시작한다. 서비스 메모리/CPU 상한 합계는 8.75 GiB/5 vCPU로 설정해 제안된 12 GB/6 vCPU 호스트에서 OS 여유를 남긴다. 이는 호스트의 실제 사용량 측정이 아니라 CI 컨테이너 상한이다.
+- 새 `.github/ci/putduk-step10-integration.sh`는 Actions 실행별 고유 Compose 프로젝트, 실행 중 생성한 임시 DB/Redis/Temporal/JWT 비밀값, `.invalid` 관리자 계정, 격리 볼륨을 쓴다. 실행 중 비밀값은 Actions mask 처리하고 출력/산출물 업로드를 하지 않는다. Caddy와 DB·Redis·Temporal·Elasticsearch의 호스트 포트는 열지 않는다.
+- 검사 절차에는 로그인 화면 HTTP 200, 임시 계정 생성/로그인과 `/api/user/self`, 인증된 `/settings`, 초안 작성/조회, 작은 가짜 PNG 업로드, 30일 후 예약을 포함한다. 게시 예약에는 DB에만 만든 가짜 Instagram integration과 가짜 토큰을 쓴다. workflow의 publish date 대기 단계가 끝나기 전에 Temporal 실행 상태 확인 및 재시작 검사를 하고 workflow를 terminate한다. 실제 SNS OAuth나 게시 요청은 하지 않는다.
+- 복구 절차는 실제 테스트 Postiz PostgreSQL dump를 같은 서버 내 별도 DB로 복원해 초안/예약 상태를 확인하고, Temporal PostgreSQL history dump도 별도 DB로 복원해 workflow 실행 행을 확인한다. Redis AOF 재시작 및 RDB 복원, 실제 테스트 업로드 파일 복원 후 SHA-256 대조, Temporal Elasticsearch snapshot 복원을 수행한다. 이는 외부 백업 저장소나 12 GB VPS에서의 복구 검증을 대체하지 않는다. 게시 중복 방지/외부 플랫폼 응답 재시도는 실제 게시 없이 검증할 수 없다.
+- 테스트 종료는 이 run id와 일치하는 상태 파일 및 전용 프로젝트 이름을 확인한 뒤 해당 Compose project, `putduk.step10.project` label 자원, run 전용 임시 폴더만 정리한다. 이미지/BuildKit cache 전체 정리 명령은 없다.
+- 로컬 사전 검증: 통합 셸 스크립트와 모든 workflow `run` 블록의 `bash -n`, 두 YAML 파일 파싱, Compose `config --quiet`, 포트/네트워크/자원 상한 정적 검사, `git diff --check` 통과. 로컬 Docker daemon은 응답하지만 기존 Docker 자원을 건드리지 않았고 컨테이너는 시작하지 않았다. 따라서 실제 통합 기능, GitHub-hosted 실행기의 리소스 및 복구 결과는 이 시점에 미검증이고 Actions 실행 결과를 성공으로 간주하지 않는다.
+- 다음: 변경을 `work`에 안전하게 커밋/푸시하고 새 Actions 실행의 실제 결과를 조회한다. 앱 소스 변경이 필요해지면 이번 승인 범위 밖이므로 원인과 파일을 먼저 보고한다.

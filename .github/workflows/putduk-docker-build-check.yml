@@ -18,7 +18,7 @@ jobs:
   build-local-image:
     if: github.ref == 'refs/heads/work'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -67,7 +67,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          required_kib=$((35 * 1024 * 1024))
+          required_kib=$((50 * 1024 * 1024))
           docker_root="$(docker info --format '{{.DockerRootDir}}')"
           for location in "$GITHUB_WORKSPACE" "$docker_root"; do
             available_kib="$(df -Pk "$location" | awk 'END {print $4}')"
@@ -77,7 +77,7 @@ jobs:
               exit 1
             fi
           done
-          echo 'Required free disk at both locations: 35 GiB'
+          echo 'Required free disk at both locations before build: 50 GiB'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -95,8 +95,8 @@ jobs:
           df -h "$GITHUB_WORKSPACE" "$docker_root"
           for location in "$GITHUB_WORKSPACE" "$docker_root"; do
             available_kib="$(df -Pk "$location" | awk 'END {print $4}')"
-            if (( available_kib < 35 * 1024 * 1024 )); then
-              echo "Free disk at $location fell below the 35 GiB safety threshold; stopping before image build." >&2
+            if (( available_kib < 50 * 1024 * 1024 )); then
+              echo "Free disk at $location fell below the 50 GiB safety threshold; stopping before image build." >&2
               exit 1
             fi
           done
@@ -105,7 +105,7 @@ jobs:
         id: image-build
         shell: bash
         env:
-          IMAGE_TAG: putduk-social-auto:step9-${{ github.sha }}
+          IMAGE_TAG: putduk-social-auto:step10-${{ github.sha }}
         run: |
           set -euo pipefail
           started="$(date +%s)"
@@ -130,7 +130,7 @@ jobs:
         if: success()
         shell: bash
         env:
-          IMAGE_TAG: putduk-social-auto:step9-${{ github.sha }}
+          IMAGE_TAG: putduk-social-auto:step10-${{ github.sha }}
         run: |
           set -euo pipefail
           docker image inspect "$IMAGE_TAG" > "$RUNNER_TEMP/putduk-image-inspect.json"
@@ -173,7 +173,7 @@ jobs:
       - name: Scan image files for credential artifacts
         if: success()
         env:
-          IMAGE_TAG: putduk-social-auto:step9-${{ github.sha }}
+          IMAGE_TAG: putduk-social-auto:step10-${{ github.sha }}
         run: |
           set -euo pipefail
           docker run --rm --network none --entrypoint node "$IMAGE_TAG" -e '
@@ -205,6 +205,75 @@ jobs:
             }
             console.log("No checked credential artifacts or known token patterns found.");
           '
+
+      - name: Check disk headroom before isolated integration services
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          for location in "$GITHUB_WORKSPACE" "$docker_root"; do
+            available_kib="$(df -Pk "$location" | awk 'END {print $4}')"
+            echo "$location available before integration: $((available_kib / 1024 / 1024)) GiB"
+            if (( available_kib < 20 * 1024 * 1024 )); then
+              echo "Less than 20 GiB remains at $location; refusing service image pulls and integration startup." >&2
+              exit 1
+            fi
+          done
+
+      - name: Run isolated Step 10 integration checks
+        if: success()
+        shell: bash
+        run: bash .github/ci/putduk-step10-integration.sh
+
+      - name: Clean up only this Step 10 run
+        if: always()
+        shell: bash
+        env:
+          STEP10_PROJECT: putdukstep10-${{ github.run_id }}-${{ github.run_attempt }}
+          STEP10_STATE: ${{ runner.temp }}/putduk-step10-state
+          STEP10_WORKDIR: ${{ runner.temp }}/putduk-step10-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ "$STEP10_PROJECT" =~ ^putdukstep10-[0-9]+-[0-9]+$ ]]; then
+            if [[ -f "$STEP10_STATE" ]]; then
+              state_project="$(sed -n 's/^PROJECT=//p' "$STEP10_STATE")"
+              state_workdir="$(sed -n 's/^WORKDIR=//p' "$STEP10_STATE")"
+              if [[ "$state_project" == "$STEP10_PROJECT" && "$state_workdir" == "$STEP10_WORKDIR" ]]; then
+                env_file="$STEP10_WORKDIR/.env"
+                if [[ -f "$env_file" ]]; then
+                  docker compose --project-name "$STEP10_PROJECT" --env-file "$env_file" \
+                    -f docker-compose.production.yaml -f .github/ci/docker-compose.step10-test.yaml \
+                    down --volumes --remove-orphans || true
+                fi
+              else
+                echo 'Step 10 state did not match this run; refusing Compose cleanup.' >&2
+              fi
+            fi
+            # Remove only resources carrying this unique run label. Never prune
+            # images, BuildKit data, or resources from another Compose project.
+            containers="$(docker ps -aq --filter "label=putduk.step10.project=$STEP10_PROJECT")"
+            if [[ -n "$containers" ]]; then docker rm -f $containers; fi
+            volumes="$(docker volume ls -q --filter "label=putduk.step10.project=$STEP10_PROJECT")"
+            if [[ -n "$volumes" ]]; then docker volume rm $volumes; fi
+            if docker ps -aq --filter "label=putduk.step10.project=$STEP10_PROJECT" | grep -q .; then
+              echo 'Run-labeled containers remain after cleanup.' >&2
+              exit 1
+            fi
+            if docker volume ls -q --filter "label=putduk.step10.project=$STEP10_PROJECT" | grep -q .; then
+              echo 'Run-labeled volumes remain after cleanup.' >&2
+              exit 1
+            fi
+            case "$STEP10_WORKDIR" in
+              "$RUNNER_TEMP"/putduk-step10-*) rm -rf -- "$STEP10_WORKDIR" ;;
+              *) echo 'Refusing to remove a path outside this run temp directory.' >&2; exit 1 ;;
+            esac
+            rm -f -- "$STEP10_STATE"
+          else
+            echo 'Invalid Step 10 project identifier; cleanup skipped.' >&2
+            exit 1
+          fi
+          echo 'Only this run’s isolated containers, volumes, and temporary files were removed.'
 
       - name: Record runner resources after build
         if: always()

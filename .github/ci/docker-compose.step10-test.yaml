@@ -1,0 +1,58 @@
+# Temporary GitHub Actions overlay only. Never use this file for production.
+# It disables Caddy, binds the app to the runner's loopback interface, blocks
+# application egress, and applies an 8.75 GiB / 5 CPU service cap to leave
+# headroom for the host on the proposed 12 GB / 6 vCPU VPS.
+services:
+  caddy:
+    profiles:
+      - step10-disabled
+
+  postiz:
+    # Keep the runner egress-isolated. The image already contains Prisma 6.5.0,
+    # so this is equivalent to the production startup script's db-push step
+    # without pnpm dlx downloading a package at container startup.
+    command:
+      - sh
+      - -c
+      - nginx && pnpm exec prisma db push --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma && pnpm run --parallel pm2 && pm2 logs
+    environment:
+      MAIN_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}
+      FRONTEND_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}/api
+      DISABLE_REGISTRATION: "false"
+      NOT_SECURED: "true"
+      EMAIL_PROVIDER: ""
+    ports:
+      - "127.0.0.1:5500:5000"
+    volumes:
+      - ${STEP10_EMPTY_DOTENV:?Set STEP10_EMPTY_DOTENV}:/app/.env:ro
+    mem_limit: 4g
+    cpus: 2.0
+
+  postiz-postgres:
+    mem_limit: 512m
+    cpus: 0.5
+
+  postiz-redis:
+    mem_limit: 256m
+    cpus: 0.25
+
+  temporal-postgresql:
+    mem_limit: 512m
+    cpus: 0.5
+
+  temporal-elasticsearch:
+    environment:
+      path.repo: /usr/share/elasticsearch/step10-snapshots
+    volumes:
+      - ${STEP10_ES_SNAPSHOT_DIR:?Set STEP10_ES_SNAPSHOT_DIR}:/usr/share/elasticsearch/step10-snapshots
+    mem_limit: 1536m
+    cpus: 0.75
+
+  temporal:
+    mem_limit: 2g
+    cpus: 1.0
+
+networks:
+  edge:
+    internal: true
