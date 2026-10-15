@@ -14,7 +14,7 @@ services:
     command:
       - sh
       - -c
-      - nginx && pnpm exec prisma db push --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma && pnpm run --parallel pm2 && pm2 logs
+      - nginx && pnpm exec prisma db push --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma && pnpm run pm2-start-apps && pm2 logs
     environment:
       MAIN_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}
       FRONTEND_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}

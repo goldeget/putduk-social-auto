@@ -16,6 +16,7 @@ on:
       - apps/backend/**
       - apps/orchestrator/**
       - libraries/**
+      - scripts/pm2-start-order.test.mjs
       - var/docker/nginx.conf
 
 permissions:
@@ -38,6 +39,9 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+
+      - name: Verify PM2 app startup is serialized
+        run: node --test scripts/pm2-start-order.test.mjs
 
       - name: Record runner resources before build
         run: |

@@ -272,11 +272,55 @@ for service in postiz postiz-postgres postiz-redis temporal-postgresql temporal-
   [[ "$health" == healthy ]] || { echo "$service health check: $health" >&2; exit 1; }
 done
 [[ -z "$(dc ps -q caddy)" ]]
+
+dc exec -T postiz pm2 jlist | python3 -c '
+import json, sys
+apps = json.load(sys.stdin)
+expected = {"frontend", "backend", "orchestrator"}
+found = {app.get("name"): app for app in apps}
+for name in sorted(expected):
+    app = found.get(name)
+    status = (app or {}).get("pm2_env", {}).get("status", "missing")
+    restarts = (app or {}).get("pm2_env", {}).get("restart_time", "unknown")
+    print(f"PM2 {name}: {status}, restarts={restarts}")
+    if status != "online":
+        raise SystemExit(f"Required PM2 app is not online: {name} ({status})")
+print("All PM2 applications are online.")
+'
+
+dc exec -T postiz node -e '
+const assertResponse = async (name, url, expectedStatus) => {
+  const response = await fetch(url);
+  console.log(`${name} HTTP ${response.status}`);
+  if (response.status !== expectedStatus) throw new Error(`${name} returned an unexpected HTTP status`);
+  return response;
+};
+(async () => {
+  await assertResponse("Frontend :4200", "http://127.0.0.1:4200/auth/login", 200);
+  const backend = await assertResponse("Backend :3000", "http://127.0.0.1:3000/auth/can-register", 200);
+  const canRegister = await backend.json();
+  if (typeof canRegister.register !== "boolean") throw new Error("Backend registration response is malformed");
+  await assertResponse("Nginx :5000", "http://127.0.0.1:5000/auth/login", 200);
+})().catch((error) => { console.error(error.message); process.exit(1); });
+'
+echo 'All three Postiz HTTP endpoints responded with expected statuses.'
+
 app_container="$(dc ps -q postiz)"
-[[ "$(docker port "$app_container" 5000/tcp)" == '127.0.0.1:5500' ]]
+if ! app_binding="$(docker port "$app_container" 5000/tcp 2>&1)"; then
+  echo 'Could not inspect Postiz host-port binding for 5000/tcp.' >&2
+  exit 1
+fi
+if [[ "$app_binding" != '127.0.0.1:5500' ]]; then
+  echo "Postiz host-port binding mismatch: expected 127.0.0.1:5500, observed ${app_binding:-<none>}." >&2
+  exit 1
+fi
 for service in postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal; do
   container="$(dc ps -q "$service")"
-  [[ -z "$(docker port "$container" 2>/dev/null || true)" ]] || { echo "$service published a host port." >&2; exit 1; }
+  if ! published_ports="$(docker port "$container" 2>&1)"; then
+    echo "Could not inspect published ports for $service." >&2
+    exit 1
+  fi
+  [[ -z "$published_ports" ]] || { echo "$service published host ports: $published_ports." >&2; exit 1; }
 done
 echo 'All six required services healthy; Caddy and internal service host ports are not exposed.'
 
@@ -611,3 +655,8 @@ printf '%s\n' "$stats_summary"
 - No real SNS credentials, OAuth, post, registry push, or public endpoint used.
 EOF
 } >> "$GITHUB_STEP_SUMMARY"
+notice_metrics="$(printf '%s' "$stats_summary" | tr '\r\n' '  ')"
+notice_metrics="${notice_metrics//'%'/'%25'}"
+notice_metrics="${notice_metrics//$'\r'/'%0D'}"
+notice_metrics="${notice_metrics//$'\n'/'%0A'}"
+printf '::notice title=Step 10 integration passed::Six services healthy; frontend/backend/orchestrator PM2 online; direct HTTP checks on 3000, 4200, 5000 passed; login, draft, image upload, schedule, Temporal timer, restart, and isolated backup/restore checks passed. %s\n' "$notice_metrics"
