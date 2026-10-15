@@ -1,3 +1,4 @@
+# Step 10 failures expose only redacted phase/log diagnostics from the CI helper.
 name: PUTDUK Docker Build Check
 
 on:
