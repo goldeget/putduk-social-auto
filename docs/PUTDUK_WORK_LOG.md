@@ -130,5 +130,7 @@
 - 소스 경로 확인: Dockerfile은 `nginx && pnpm run pm2`; 루트 `pm2-run`은 Prisma DB push 후 workspace PM2를 실행한다. 테스트 override는 이미지 내 Prisma CLI로 `pnpm exec prisma db push`를 실행해 `pnpm dlx`의 런타임 다운로드를 피한다. PM2 workspace 항목은 frontend(4200), backend(3000), orchestrator이며 Nginx는 5000에서 프록시한다. Compose healthcheck는 컨테이너 내부 `127.0.0.1:5000`의 HTTP 상태가 500 미만인지 검사한다. 테스트 컨테이너에는 4 GiB 메모리 제한이 있다.
 - 진단 전용 수정: 실패 시 run 전용 cleanup보다 먼저 Postiz 상태/종료/OOM/재시작 수, 최근 healthcheck 기록, Postiz 전용 시작 로그, 프로세스와 PM2 앱 상태, 포트 3000/4200/5000, Prisma 실행 단서, 컨테이너별 CPU/RAM을 수집하도록 `.github/ci/putduk-step10-integration.sh`를 보완했다. 공개 출력에서는 생성된 비밀값, DB/Redis URL, 토큰·쿠키·JWT 등을 가린다. 앱 코드, 운영 Compose, 개발 Compose는 수정하지 않았다.
 - `.github/workflows/putduk-docker-build-check.yml`의 주석만 변경해 경로 필터에 따라 격리 진단 실행 1회를 트리거한다. 무료 `ubuntu-latest`와 `contents: read`, 로컬 이미지 빌드만 유지하며 이미지 push는 없다.
-- 정적 검사 통과: 통합 스크립트 `bash -n`, `git diff --check`. GitHub Actions 진단 실행 및 결과는 푸시 후 기록한다.
-- 다음: 정확한 Postiz 오류가 확인되면 추가 개발을 멈추고 원인과 필요한 최소 조치만 보고한다. 앱 코드 수정이 필요하면 사용자 승인을 먼저 받는다.
+- 정적 검사 통과: 통합 스크립트 `bash -n`, 3개 YAML 파일 파싱, 테스트용 두 Compose 파일의 `config --quiet`, `git diff --check`.
+- 진단 실행 `38796024093` (커밋 `ebf09e3c9bf9084a55e6500f9375ab5b3826e869`)에서 이미지 빌드는 성공했다. 통합 단계는 4분 58초 후 실패했고, annotation은 같은 `docker compose` 실행 안에서 `start and health-check six isolated services` phase / 스크립트 line 57 / exit 1을 표시했다. run 전용 cleanup은 성공했다.
+- 익명 GitHub 화면에서 summary와 annotations는 읽을 수 있었으나, 상세 step log URL은 GitHub의 404 “Not Found” 페이지로 응답했다. 이 환경의 `gh auth status`도 `GH_TOKEN` 인증 실패를 보고해 상세 로그를 가져오지 못했다. 따라서 개선한 Postiz 상태·health·프로세스·포트·Prisma·메모리 진단 출력의 실제 내용은 미확인이다. Postiz unhealthy가 통합 단계 실패를 일으켰다는 사용자 제공 사실 외에 근본 앱 오류는 확정하지 않는다.
+- 다음: 사용자가 run `38796024093`의 “Run isolated Step 10 integration checks” 로그에서 새로 출력된 Postiz diagnostics를 비밀값 제거 후 공유한다. 그 출력으로 원인을 판별하고, 앱 코드 변경이 필요하면 별도 승인을 기다린다. 추가 Action 재실행은 하지 않는다.
