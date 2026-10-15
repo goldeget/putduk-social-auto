@@ -171,3 +171,13 @@
 - 다음 직접 HTTP 검사 시점에는 4200과 5000이 열려 있었으나 3000은 닫혀 있어 통합 단계가 실패했다. Postiz 로그 꼬리에는 Nest backend의 route mapping 로그가 있었고 fatal/uncaught/OOM 증거는 annotation에서 확인되지 않았다. 따라서 PM2 초기화 경쟁은 해결됐지만 backend HTTP readiness 시점은 미통과/미확정이다. 즉시 검사 후 서버 준비를 기다리는 polling이 필요할 수 있으나, 추가 Actions 실행 상한 1회를 모두 사용해 이 task에서 다시 실행하지 않았다.
 - 로그인, 초안, 이미지 업로드, 예약/Temporal, 재시작 후 보존, DB/Redis/Elasticsearch/업로드 복원 단계는 직접 HTTP 게이트를 통과하지 않아 실행되지 않았다. 최대 RAM/CPU/디스크 결과도 실패 annotation에 제공되지 않아 UNKNOWN이다. Docker published-port check 단계까지 도달하지 않았으나 별도 local Docker probe에서는 loopback mapping `127.0.0.1:<host-port>`와 미공개 컨테이너의 빈 출력/exit 0을 확인했고, 스크립트 오류 메시지는 보강했다.
 - 백업은 `work`에 커밋 후 최종 SHA를 다시 조회해 확인한다. 서버 구매 판정은 NO-GO 유지.
+
+## 백엔드 API 준비 대기 및 통합 검사 재개 — 2026-10-15
+
+- 시작 기준: 저장소 `goldeget/putduk-social-auto`, 브랜치 `work`, 로컬·원격 SHA `54a09b66f177e6d0d8d7dbd3987553de7a793ed0` 일치, 작업 트리 깨끗함. 클라우드 활성화 후 Node.js `22.20.0`, pnpm `10.6.1` 확인.
+- 직전 통합 실행 `38809241765`는 앱 컨테이너 healthy, frontend/backend/orchestrator PM2 online, 세 앱 재시작 0, OOM 없음이었다. 검사 순간 backend 3000은 연결되지 않았고 `/auth/can-register` 요청은 실패했다. 이어 5초 뒤 NestJS route 초기화 로그가 나온 사실은 API 준비 지연 가능성을 뒷받침하지만, 이 로그만으로 실제 리스닝 시각이나 유일한 근본 원인을 확정할 수는 없다. PM2 초기화 경쟁은 순차 시작과 세 프로세스 online 결과로 해소된 것으로 확인됐다.
+- 신규 `scripts/backend-readiness.mjs`는 실제 `GET /auth/can-register`를 기본 최대 180초 동안 4초 간격으로 확인한다. 개별 요청 제한은 최대 3초이며 남은 총 대기 시간을 넘지 않는다. HTTP 200과 `{register: boolean}` 형태를 모두 확인하고, 오류 시 HTTP 상태 또는 안전한 네트워크 오류 코드/유형, 시도 수, 경과 시간을 출력한다. 비밀값이나 원문 오류 메시지는 출력하지 않는다. 마감 시각 이후 도착한 응답은 성공 처리하지 않는다.
+- `.github/ci/putduk-step10-integration.sh`는 이 검사를 `docker compose exec -T`로 실행하고, 성공한 뒤에만 frontend 4200과 Nginx 5000의 HTTP 200 및 공개 포트 바인딩 검사를 계속한다. 기존 loopback-only 포트 제한, 외부 통신 차단, PM2 상태 확인, 실패 진단/로그 마스킹은 유지한다. PM2 순차 시작 코드는 변경하지 않았다.
+- 신규 `scripts/backend-readiness.test.mjs`는 ECONNREFUSED 뒤 정상 응답, HTTP 200의 잘못된 JSON, 오류 상태에서의 bounded timeout/짧은 요청 신호, 총 마감 이후의 응답 및 JSON 지연을 확인한다. PM2/격리 포트 정적 회귀 검사도 업데이트했다.
+- 로컬 검증: 기존 PM2 검사와 신규 준비 검사 합계 7개 테스트 통과, `node --check`, 통합 셸 `bash -n`, workflow/Compose YAML 파싱, `docker compose ... config --quiet`, `git diff --check` 통과. 실제 격리 Postiz 컨테이너 또는 전체 GitHub Actions 검사는 아직 이번 변경으로 실행되지 않았다.
+- 다음: work에 이 체크포인트를 저장하고 무료 `ubuntu-latest` 통합 실행을 한 번만 수행한다. 실제 API 준비 경과 시간과 뒤이은 로그인·초안·업로드·예약/Temporal·재시작·복구 검증 결과가 모두 확인되기 전 운영 구매 판정은 NO-GO다.

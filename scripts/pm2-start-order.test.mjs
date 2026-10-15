@@ -8,6 +8,7 @@ const backend = JSON.parse(readFileSync(new URL('../apps/backend/package.json', 
 const orchestrator = JSON.parse(readFileSync(new URL('../apps/orchestrator/package.json', import.meta.url)));
 const integrationCompose = readFileSync(new URL('../.github/ci/docker-compose.step10-test.yaml', import.meta.url), 'utf8');
 const integrationScript = readFileSync(new URL('../.github/ci/putduk-step10-integration.sh', import.meta.url), 'utf8');
+const backendReadiness = readFileSync(new URL('./backend-readiness.mjs', import.meta.url), 'utf8');
 
 test('operational and isolated startup register all PM2 apps sequentially through one command', () => {
   const expected = [
@@ -27,7 +28,14 @@ test('operational and isolated startup register all PM2 apps sequentially throug
   assert.match(integrationScript, /pm2 jlist/);
   assert.match(integrationScript, /All PM2 applications are online/);
   assert.match(integrationScript, /http:\/\/127\.0\.0\.1:4200\/auth\/login/);
-  assert.match(integrationScript, /http:\/\/127\.0\.0\.1:3000\/auth\/can-register/);
+  assert.match(backendReadiness, /http:\/\/127\.0\.0\.1:3000\/auth\/can-register/);
+  assert.match(backendReadiness, /timeoutMs = 180_000/);
+  assert.match(backendReadiness, /pollIntervalMs = 4_000/);
+  assert.match(backendReadiness, /requestTimeoutMs = 3_000/);
+  assert.match(backendReadiness, /response\.status !== 200/);
+  assert.match(backendReadiness, /typeof body\.register === 'boolean'/);
+  assert.match(integrationScript, /node --input-type=module - < scripts\/backend-readiness\.mjs/);
+  assert.ok(integrationScript.indexOf('wait up to 180 seconds for backend API readiness') < integrationScript.indexOf('verify frontend and Nginx HTTP responses after backend readiness'));
   assert.match(integrationScript, /http:\/\/127\.0\.0\.1:5000\/auth\/login/);
   assert.match(integrationScript, /Step 10 integration passed/);
 });

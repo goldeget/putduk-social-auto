@@ -288,18 +288,18 @@ for name in sorted(expected):
 print("All PM2 applications are online.")
 '
 
+mark_phase 'wait up to 180 seconds for backend API readiness'
+dc exec -T postiz node --input-type=module - < scripts/backend-readiness.mjs
+
+mark_phase 'verify frontend and Nginx HTTP responses after backend readiness'
 dc exec -T postiz node -e '
 const assertResponse = async (name, url, expectedStatus) => {
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
   console.log(`${name} HTTP ${response.status}`);
   if (response.status !== expectedStatus) throw new Error(`${name} returned an unexpected HTTP status`);
-  return response;
 };
 (async () => {
   await assertResponse("Frontend :4200", "http://127.0.0.1:4200/auth/login", 200);
-  const backend = await assertResponse("Backend :3000", "http://127.0.0.1:3000/auth/can-register", 200);
-  const canRegister = await backend.json();
-  if (typeof canRegister.register !== "boolean") throw new Error("Backend registration response is malformed");
   await assertResponse("Nginx :5000", "http://127.0.0.1:5000/auth/login", 200);
 })().catch((error) => { console.error(error.message); process.exit(1); });
 '
