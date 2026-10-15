@@ -370,10 +370,12 @@ const assertResponse = async (name, url, expectedStatus) => {
 '
 echo 'All three Postiz HTTP endpoints responded with expected statuses.'
 
+resolve_postiz_edge_ip() {
+local app_container edge_network app_networks_json
 app_container="$(dc ps -q postiz)"
 edge_network="${PROJECT}_edge"
 app_networks_json="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$app_container")"
-POSTIZ_EDGE_IP="$(python3 - "$edge_network" "$app_networks_json" <<'PY'
+python3 - "$edge_network" "$app_networks_json" <<'PY'
 import ipaddress, json, sys
 edge_name, raw = sys.argv[1:]
 networks = json.loads(raw)
@@ -388,7 +390,12 @@ if address.version != 4 or not address.is_private:
     raise SystemExit('Postiz edge network address is not a private IPv4 address.')
 print(address)
 PY
-)"
+}
+
+verify_postiz_isolation() {
+local app_container app_networks_json
+app_container="$(dc ps -q postiz)"
+app_networks_json="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$app_container")"
 mapfile -t postiz_networks < <(python3 - "$app_networks_json" <<'PY'
 import json, sys
 for name in json.loads(sys.argv[1]): print(name)
@@ -406,6 +413,10 @@ published = {name: bindings for name, bindings in ports.items() if bindings}
 if published:
     raise SystemExit(f'Unexpected Postiz host-published ports: {published}')
 PY
+}
+
+POSTIZ_EDGE_IP="$(resolve_postiz_edge_ip)"
+verify_postiz_isolation
 echo "Postiz has no host-published ports; test traffic will use its private edge IP ${POSTIZ_EDGE_IP}."
 
 postiz_curl() {
@@ -652,21 +663,54 @@ mark_phase 'restart Postiz and Temporal and verify scheduled state'
 echo 'Restarting Postiz and Temporal; checking that the post and timer survive.'
 dc restart postiz temporal >/dev/null
 dc up -d --wait --wait-timeout 900 postiz temporal >/dev/null
-http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/schedule-after-restart.json" \
-  -b "$WORKDIR/cookies.txt" -w '%{http_code}' "$BASE_URL/api/posts/$SCHEDULED_ID")"
-[[ "$http" == 200 ]]
+mark_phase 'wait up to 180 seconds for backend API readiness after restart'
+dc exec -T -e BACKEND_READINESS_TIMEOUT_MS=180000 -e BACKEND_READINESS_INTERVAL_MS=4000 \
+  -e BACKEND_READINESS_REQUEST_TIMEOUT_MS=3000 postiz node --input-type=module - < scripts/backend-readiness.mjs
+
+mark_phase 'refresh isolated Postiz address and verify frontend and Nginx after restart'
+POSTIZ_EDGE_IP="$(resolve_postiz_edge_ip)"
+verify_postiz_isolation
+echo "Refreshed isolated Postiz edge IP after restart: ${POSTIZ_EDGE_IP}."
+dc exec -T postiz node -e '
+const assertResponse = async (name, url, expectedStatus) => {
+  const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  console.log(`${name} HTTP ${response.status}`);
+  if (response.status !== expectedStatus) throw new Error(`${name} returned an unexpected HTTP status`);
+};
+(async () => {
+  await assertResponse("Frontend :4200", "http://127.0.0.1:4200/auth/login", 200);
+  await assertResponse("Nginx :5000", "http://127.0.0.1:5000/auth/login", 200);
+})().catch((error) => { console.error(error.message); process.exit(1); });
+'
+
+mark_phase 'retry authenticated scheduled post read after restart'
+if ! node scripts/step10-restart-readiness.mjs \
+  --url "$BASE_URL/api/posts/$SCHEDULED_ID" \
+  --cookie-jar "$WORKDIR/cookies.txt" \
+  --output "$WORKDIR/schedule-after-restart.json" \
+  --connect-to "127.0.0.1:5500:${POSTIZ_EDGE_IP}:5000"; then
+  echo 'Authenticated scheduled-post read did not become ready after restart; see HTTP status, attempt count, and elapsed time above.' >&2
+  exit 1
+fi
 python3 - "$WORKDIR/schedule-after-restart.json" <<'PY'
 import json, sys
 r = json.load(open(sys.argv[1], encoding='utf-8'))
 if not r.get('posts') or r['posts'][0].get('state') != 'QUEUE': raise SystemExit('Scheduled post lost after restart.')
 PY
-if ! dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID" --address temporal:7233 --output json > "$workflow_file" 2> "$workflow_error_file" || \
-   [[ "$(node scripts/step10-temporal-status.mjs "$workflow_file")" != RUNNING ]]; then
-  workflow_status="$(node scripts/step10-temporal-status.mjs "$workflow_file" 2>/dev/null || echo UNKNOWN)"
+workflow_after_restart_file="$WORKDIR/temporal-after-restart.json"
+workflow_after_restart_error_file="$WORKDIR/temporal-after-restart.stderr"
+if ! dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID" --address temporal:7233 --output json \
+  > "$workflow_after_restart_file" 2> "$workflow_after_restart_error_file"; then
+  workflow_status='UNAVAILABLE'
+else
+  workflow_status="$(node scripts/step10-temporal-status.mjs "$workflow_after_restart_file" 2>/dev/null || echo UNKNOWN)"
+fi
+if [[ "$workflow_status" != RUNNING ]]; then
   printf 'Temporal timer did not survive restart; parsed status=%s.\n' "$workflow_status" >&2
-  sanitize_log "$workflow_error_file" >&2
+  if [[ -s "$workflow_after_restart_error_file" ]]; then sanitize_log "$workflow_after_restart_error_file" >&2; fi
   exit 1
 fi
+echo "Fresh Temporal describe after restart confirmed Workflow ID ${WORKFLOW_ID} is RUNNING."
 echo 'Postiz scheduled record and Temporal timer survived restart.'
 
 mark_phase 'backup and restore Postiz PostgreSQL data'

@@ -12,6 +12,9 @@ on:
       - scripts/step10-temporal-status.mjs
       - scripts/step10-temporal-status.test.mjs
       - scripts/step10-temporal-start-error.test.mjs
+      - scripts/step10-restart-readiness.mjs
+      - scripts/step10-restart-readiness.test.mjs
+      - scripts/step10-restart-flow.test.mjs
       - Dockerfile.dev
       - package.json
       - pnpm-lock.yaml
@@ -49,7 +52,7 @@ jobs:
           fetch-depth: 1
 
       - name: Verify PM2 startup, backend readiness, and isolated network access
-        run: node --test scripts/pm2-start-order.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs scripts/step10-upload-response.test.mjs scripts/step10-temporal-status.test.mjs scripts/step10-temporal-start-error.test.mjs
+        run: node --test scripts/pm2-start-order.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs scripts/step10-upload-response.test.mjs scripts/step10-temporal-status.test.mjs scripts/step10-temporal-start-error.test.mjs scripts/step10-restart-readiness.test.mjs scripts/step10-restart-flow.test.mjs
 
       - name: Record runner resources before build
         run: |
