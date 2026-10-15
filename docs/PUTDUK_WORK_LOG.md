@@ -222,3 +222,11 @@
 - `.github/ci/putduk-step10-integration.sh`는 기존 90초 제한을 유지하면서 describe JSON의 상태를 판정한다. 실패하면 describe 종료 코드와 안전한 상태 요약, 해당 WorkflowId 전용 list 결과, `main` task queue의 poller/backlog 요약 및 마스킹된 오류를 수집한다. 재시작 후 확인에도 같은 JSON 판정을 적용했다. `.github/workflows/putduk-docker-build-check.yml`에 검사 파일을 경로 감시와 Node 테스트 명령으로 추가했다.
 - 새 상태 판정 테스트와 오류 로그 가드 테스트 포함 기존 CI Node 검사 22/22 통과, `bash -n`, workflow YAML 파싱, 신규 JS Prettier 검사, `git diff --check` 통과. `pnpm run build:backend`도 exit 0으로 완료했다. 전체 Postiz Actions 통합 재실행 및 앱 런타임 Temporal workflow 생성은 아직 미실행이다. 이번 변경을 보존한 뒤 허용된 전체 Docker/GitHub Actions 실행은 최대 1회만 수행한다.
 - 이전 실행의 재시작 후 예약 보존, Postiz/Temporal DB·Redis·Elasticsearch·업로드 백업/복원, 실제 서버에 준하는 RAM/CPU/디스크 결과는 **미검증**이다. 실제 SNS OAuth/게시도 이 단계에서 하지 않는다. 서버 구매 판정은 **NO-GO** 유지.
+
+### 단일 Temporal 진단 통합 실행 결과 — 2026-10-15
+
+- 진단 변경 커밋 `a1fe1ea01c4a63356c912f4095f2a427473f0bff`는 `work`에 푸시됐고 로컬·원격 SHA 일치를 확인했다. 실행 링크: `https://github.com/goldeget/putduk-social-auto/actions/runs/38821360283` (job `116718434380`). 공개 Actions 페이지에서 source SHA가 해당 커밋임을 확인했다.
+- Node 회귀 테스트, 비밀정보 파일 검사, 사전 디스크 검사, Docker Buildx, linux/amd64 이미지 빌드, 이미지 메타데이터/비밀 검사, 통합 전 디스크 여유 검사는 성공했다. Docker 이미지 빌드는 약 9분 25초였다.
+- `Run isolated Step 10 integration checks` 단계는 23:14:39–23:16:14 UTC, 약 95초 후 실패했다. 해당 단계 전체 실패는 확인되지만, 공개 job page에는 내부 스크립트 phase나 Temporal CLI 진단 내용이 표시되지 않는다. 인증된 Actions API는 현재 GitHub CLI에서 토큰 거부를 반환했고, 상세 log URL은 HTTP 404였다. 따라서 이 새 실행에서 실제 workflow 존재/상태, `workflow start` 오류, worker poller/backlog, 로그인 이후 어느 검사까지 통과했는지는 **미확정**이며 성공으로 보고하지 않는다.
+- run 전용 정리 단계와 사후 자원 기록 단계는 성공했다. 다만 요약의 RAM·CPU·디스크 숫자를 읽을 수 없어 수치는 **미확인**이다. 이 실행은 실패했으므로 후속 재시작과 데이터 백업·복원은 완료 증거가 없고 **미검증**이다.
+- 사용자가 전달한 이전 실행 `38818085590`의 업로드·예약 API 및 Postiz `QUEUE` 통과 사실은 유효한 기존 증거다. 새 단일 실행 후에도 Temporal 예약 성공, 재시작, DB/Temporal/Redis/Elasticsearch/미디어 복원은 검증되지 않았다. 통합 재실행 한도는 사용 완료했고, 서버 구매 판정은 **NO-GO** 유지한다. 상세 실패 원인을 확정하려면 Actions의 인증된 “Run isolated Step 10 integration checks” 원시 로그가 필요하다.
