@@ -1,0 +1,218 @@
+name: putduk-production
+
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    init: true
+    command: ["reverse-proxy", "--from", "${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}", "--to", "postiz:5000"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - edge
+    depends_on:
+      postiz:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  postiz:
+    image: ${POSTIZ_IMAGE:?Set POSTIZ_IMAGE to a tested immutable image digest}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    environment:
+      MAIN_URL: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}
+      FRONTEND_URL: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}
+      NEXT_PUBLIC_BACKEND_URL: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}/api
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      JWT_SECRET: ${JWT_SECRET:?Set a unique JWT_SECRET}
+      DATABASE_URL: postgresql://postiz-user:${POSTIZ_DB_PASSWORD:?Set POSTIZ_DB_PASSWORD}@postiz-postgres:5432/postiz-db
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@postiz-redis:6379
+      TEMPORAL_ADDRESS: temporal:7233
+      IS_GENERAL: "true"
+      DISABLE_REGISTRATION: "true"
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      NOT_SECURED: "false"
+      THREADS_APP_ID: ${THREADS_APP_ID:-}
+      THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_BUSINESS_CLIENT_ID: ${TIKTOK_BUSINESS_CLIENT_ID:-}
+      TIKTOK_BUSINESS_CLIENT_SECRET: ${TIKTOK_BUSINESS_CLIENT_SECRET:-}
+    volumes:
+      - postiz-config:/config
+      - postiz-uploads:/uploads
+    expose:
+      - "5000"
+    networks:
+      - edge
+      - app-data
+      - temporal
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5000').then(r => process.exit(r.status < 500 ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging: *default-logging
+
+  postiz-postgres:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postiz-user
+      POSTGRES_PASSWORD: ${POSTIZ_DB_PASSWORD:?Set POSTIZ_DB_PASSWORD}
+      POSTGRES_DB: postiz-db
+    volumes:
+      - postiz-postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postiz-user -d postiz-db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+
+  postiz-redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    volumes:
+      - postiz-redis-data:/data
+    networks:
+      - app-data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+  temporal-postgresql:
+    image: postgres:16.9-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD:?Set TEMPORAL_DB_PASSWORD}
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    networks:
+      - temporal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      cluster.routing.allocation.disk.threshold_enabled: "true"
+      cluster.routing.allocation.disk.watermark.low: 512mb
+      cluster.routing.allocation.disk.watermark.high: 256mb
+      cluster.routing.allocation.disk.watermark.flood_stage: 128mb
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      xpack.security.enabled: "false"
+    volumes:
+      - temporal-elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - temporal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    mem_limit: 2g
+    logging: *default-logging
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: unless-stopped
+    stop_grace_period: 60s
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:?Set TEMPORAL_DB_PASSWORD}
+      POSTGRES_SEEDS: temporal-postgresql
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      ENABLE_ES: "true"
+      ES_SEEDS: temporal-elasticsearch
+      ES_VERSION: v7
+      TEMPORAL_NAMESPACE: default
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    networks:
+      - temporal
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+      temporal-elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address 127.0.0.1:7233 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    logging: *default-logging
+
+networks:
+  edge:
+  app-data:
+    internal: true
+  temporal:
+    internal: true
+
+volumes:
+  caddy-data:
+  caddy-config:
+  postiz-config:
+  postiz-uploads:
+  postiz-postgres-data:
+  postiz-redis-data:
+  temporal-postgres-data:
+  temporal-elasticsearch-data:
