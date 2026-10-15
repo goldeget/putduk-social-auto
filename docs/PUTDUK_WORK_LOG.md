@@ -82,3 +82,14 @@
 - 이미지 빌드 전 디스크는 32 GiB 중 28 GiB 가용이었다. 검증용 Temporal 의존 이미지 pull 후 사용량이 약 17 GiB로 증가해 빌드는 안전하지 않다고 판단했다. 격리 자원과 해당 이미지 태그 정리 후 원래 가용량으로 복구했다. 동일한 Google Fonts 실패를 내는 전체 이미지 빌드는 반복하지 않았다.
 - 이번 단계 테스트: Compose config 통과, 실제 격리 Temporal health 통과, Git ignore 확인 통과, 변경 patch의 토큰/개인키 패턴 검색에서 일치 없음, Jest 2/2 통과, backend/orchestrator build 통과, frontend typecheck 통과, 최종 `git diff --check` 통과. 전용 gitleaks/trufflehog 도구는 설치돼 있지 않았다. Docker 이미지 생성, Postiz 앱 전체 실행, 관리자 로그인/게시/예약, GitHub Actions, SNS 연결/게시, 공식 문서의 최신 정책은 미검증이다.
 - 미완료: Corepack pnpm 버전 포인터 오류, GitHub Actions를 통한 퍼뜩 소스 이미지 빌드/배포 방식 및 비용·권한, 현재 소스와 공식 Postiz 이미지 digest의 revision 매핑. 앱 UI/폰트 코드 변경은 승인 없이 진행하지 않는다. 다음에는 별도 승인과 목적지/권한 확인 후 프로젝트 소유 GHCR로의 격리 빌드 설계를 검토한다.
+
+## 8단계 — GitHub Actions 프런트엔드 빌드 확인
+
+- 시작 시 저장소 `goldeget/putduk-social-auto`, `work`, 로컬·원격 SHA `df887a0c611fe215e476e4143340aa203155a5cf`, 깨끗한 작업 트리와 기존 작업 기록을 확인했다.
+- 새 `.github/workflows/putduk-frontend-build-check.yml`은 `work`에서 해당 워크플로 파일 변경 시에만 push 실행된다. `workflow_dispatch`, pull request, tag, schedule 트리거는 없다. job timeout 45분, 동시 실행 시 이전 실행 취소, checkout 자격증명 미보존, `GITHUB_TOKEN` 권한 `contents: read`만 설정했다. secret 참조, Docker, GHCR, package write, release/push 단계는 없다.
+- Node `22.20.0`, pnpm `10.6.1`, `pnpm install --frozen-lockfile`, 실제 프런트엔드 명령 `pnpm --filter postiz-frontend run build`을 사용한다. 기존 `postiz-frontend`의 build 스크립트가 `next build`임을 확인했다. 빌드 전후 CPU 코어 수, 메모리, workspace 디스크 용량을 기록하고 Google Fonts CSS와 응답에서 찾은 gstatic 글꼴 파일을 각각 다운로드 확인한다. 각 GitHub step의 실패 출력이 오류 로그로 남으며 자동 재시도는 구성하지 않았다.
+- 로컬에서 workflow YAML 및 branch/path/권한/버전/명령/금지 단계 정적 assertion이 통과했다. 동일한 Google Fonts CSS와 gstatic 파일 요청은 현재 클라우드에서 각각 HTTP 200이었다. 이는 GitHub-hosted runner의 실행 결과가 아니다.
+- GitHub-hosted 표준 Ubuntu runner만 사용하고 Larger Runner는 사용하지 않는다. 공개 저장소의 표준 runner는 무료 대상이라는 GitHub 정책을 적용한 설계이나, 이번 환경의 프록시가 GitHub 문서/API 요청을 차단해 현재 저장소의 Actions 활성화 설정·계정 결제 상태와 실제 runner quota를 직접 조회하지 못했다. `gh` API 요청은 유효한 로그인 상태를 요구했고, 자격정보 값은 출력하지 않았다. 설정을 변경하지 않았다.
+- 기존 `.github/workflows/build.yml`은 모든 push, pull request, merge group에서 기존 전체 빌드 스크립트를 실행한다. 따라서 `work` push는 이 기존 일반 빌드도 트리거한다. `build-containers.yml`은 수동 실행 또는 tag push에서만 실행되므로 이번 branch push는 기존 GHCR 이미지 게시 workflow를 트리거하지 않는다. 새 workflow는 요청대로 자체 파일 경로만 감시한다. 다른 기존 예약·수동 workflow 및 그 비밀값은 변경·사용하지 않았다.
+- 현재 단계에 새 workflow 파일의 자동 실행 여부와 run URL/로그를 확인할 GitHub API 접근이 없어 실제 Actions run은 확인 대기 상태다. 따라서 Google Fonts 문제 해결, 실제 GitHub-hosted 프런트엔드 빌드, 실제 runner CPU/RAM/디스크, 공개된 run URL은 미검증이다. Docker 전체 빌드·이미지 생성은 실행하지 않았다.
+- 실제 Actions run 결과를 확인한 뒤에만 Google Fonts 오류 해결 여부를 판정한다. Actions 비활성 또는 결제 설정 변경이 필요하면 사용자에게 요청한다. 이후 Docker 빌드 검토는 별도 승인 전 진행하지 않는다.

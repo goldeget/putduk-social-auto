@@ -1,0 +1,96 @@
+name: PUTDUK Frontend Build Check
+
+on:
+  push:
+    branches:
+      - work
+    paths:
+      - .github/workflows/putduk-frontend-build-check.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: putduk-frontend-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-build:
+    if: github.ref == 'refs/heads/work'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Check out source without persisting credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Record runner resources before build
+        run: |
+          set -euo pipefail
+          echo "CPU cores: $(nproc)"
+          echo 'Memory:'
+          free -h
+          echo 'Workspace disk:'
+          df -h "$GITHUB_WORKSPACE"
+          echo "Node: $(node --version)"
+          echo "pnpm: $(pnpm --version)"
+
+      - name: Verify Google Fonts CSS and font download
+        shell: bash
+        run: |
+          set -euo pipefail
+          css_file="$RUNNER_TEMP/putduk-plus-jakarta-sans.css"
+          curl --fail --silent --show-error --max-time 30 \
+            'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,500;0,600;1,500;1,600&display=swap' \
+            --output "$css_file"
+          echo 'Google Fonts CSS: HTTP 200'
+
+          font_url="$(python3 - "$css_file" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          css = Path(sys.argv[1]).read_text()
+          match = re.search(r"url\((https://fonts\.gstatic\.com/[^)'\"]+)", css)
+          if not match:
+              raise SystemExit('Google Fonts CSS did not contain a downloadable gstatic font URL')
+          print(match.group(1))
+          PY
+          )"
+          curl --fail --silent --show-error --max-time 30 \
+            --output /dev/null --write-out 'Google Fonts font file: HTTP %{http_code}\n' \
+            "$font_url"
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the actual frontend
+        run: pnpm --filter postiz-frontend run build
+
+      - name: Record runner resources after build
+        if: always()
+        run: |
+          echo "CPU cores: $(nproc)"
+          echo 'Memory:'
+          free -h
+          echo 'Workspace disk:'
+          df -h "$GITHUB_WORKSPACE"
