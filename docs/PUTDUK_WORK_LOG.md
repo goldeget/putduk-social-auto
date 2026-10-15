@@ -181,3 +181,11 @@
 - 신규 `scripts/backend-readiness.test.mjs`는 ECONNREFUSED 뒤 정상 응답, HTTP 200의 잘못된 JSON, 오류 상태에서의 bounded timeout/짧은 요청 신호, 총 마감 이후의 응답 및 JSON 지연을 확인한다. PM2/격리 포트 정적 회귀 검사도 업데이트했다.
 - 로컬 검증: 기존 PM2 검사와 신규 준비 검사 합계 7개 테스트 통과, `node --check`, 통합 셸 `bash -n`, workflow/Compose YAML 파싱, `docker compose ... config --quiet`, `git diff --check` 통과. 실제 격리 Postiz 컨테이너 또는 전체 GitHub Actions 검사는 아직 이번 변경으로 실행되지 않았다.
 - 다음: work에 이 체크포인트를 저장하고 무료 `ubuntu-latest` 통합 실행을 한 번만 수행한다. 실제 API 준비 경과 시간과 뒤이은 로그인·초안·업로드·예약/Temporal·재시작·복구 검증 결과가 모두 확인되기 전 운영 구매 판정은 NO-GO다.
+
+### 단일 GitHub Actions 통합 실행 결과
+
+- 실행 `38812246043` (`https://github.com/goldeget/putduk-social-auto/actions/runs/38812246043`), source SHA `51c68f2c41bffd0ca67528ed74acc049028281a3`. Actions 사전 Node 테스트, amd64 Docker 이미지 빌드(8분 44초), 이미지 검사, 비밀 파일 검사 및 격리 통합용 디스크 사전검사는 통과했다. Docker 이미지 게시 단계는 없었다.
+- 통합 스크립트에서는 여섯 컨테이너의 healthcheck 대기 및 확인을 통과한 뒤 PM2 검사를 진행했다. 실패 진단 요약은 Postiz `healthy`, `exit=0`, `OOMKilled=false`, 재시작 0; frontend/backend/orchestrator 모두 PM2 `online`, 각 재시작 0; 내부 3000/4200/5000 TCP 포트 열림을 보고했다. Prisma 시작 체인도 완료된 것으로 확인됐다.
+- 통합 명령은 총 79초 실행 후 exit 1로 끝났고 run 전용 정리는 성공했다. 진단 시각(21:55:12 UTC) 뒤에 출력된 마지막 Nest route mapping 로그(21:55:23 UTC)는 backend 초기화가 계속 진행됐음을 보인다. 다만 현재 공개된 GitHub annotation은 실패 단계명, 준비 probe 성공 문구/경과 시간, HTTP 응답 코드 및 실패 명령을 포함하지 않는다. 원시 step log의 공개 경로는 HTTP 404를 반환해 이 실행에서 `/auth/can-register`가 언제 200이 됐는지, 이후 어디서 실패했는지 확정할 수 없다.
+- 따라서 이번 Actions 실행으로는 PM2 기동과 전체 서비스 health 및 포트 준비는 확인했으나 backend HTTP API readiness의 경과 시간은 **미측정**이다. 테스트 관리자 로그인, 초안·업로드·예약, Temporal 앱 워크플로, 재시작 후 실제 콘텐츠 유지, Postiz/Temporal DB·Redis·Elasticsearch·미디어 복원, CPU/RAM/실행기 디스크 수치는 **미검증**이다. 실패를 성공으로 표시하지 않는다.
+- 사용자 지정 최대 1회 통합 실행을 사용했으므로 재실행하지 않는다. 정확한 실패 단계를 확정하려면 저장소에 로그인된 Actions 원시 job log를 열람해야 한다. 다음 서버 판정은 NO-GO다.
