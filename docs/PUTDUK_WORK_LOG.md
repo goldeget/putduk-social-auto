@@ -3,7 +3,7 @@
 ## 현재 상태
 
 - 마지막 작업 일시: 2026-10-15 (Asia/Seoul)
-- 개발 단계: 독립 Jest 설정 및 백엔드 기능 테스트 복구
+- 개발 단계: Jest 설정 복구 완료; 빌드/타입 검증 진행 중
 - 저장소: `goldeget/putduk-social-auto`
 - 현재 작업 브랜치: `work`
 - 복구 기준 커밋: `4355c579980b2e8c1231c43256cf1b9a7dc0a666`
@@ -18,20 +18,25 @@
 - 저장소 원격 주소는 `https://github.com/goldeget/putduk-social-auto.git`, 작업 브랜치는 `work`로 확인했다.
 - 복구 기준 이후의 기존 작업 변경을 확인했다. 이전 진단 문서 외 코드 수정은 없었고, 작업 트리는 깨끗했다.
 - Jest를 실행해 실패가 테스트 파일 실행 이전의 설정 로드 단계에서 발생함을 재현했다.
+- `jest.config.ts`에서 Nx 프로젝트 검색을 제거하고, `jest.preset.js`에 독립 ts-jest 설정을 구성했다.
+- `ConfigurationChecker`의 정상 설정 및 잘못된 필수값/URL 검증 테스트 2개를 추가했다.
+- ts-jest의 기본 전체 타입 검사 경로는 테스트 실행 중 Node 힙 한도에 도달했다. Jest transform에서 TypeScript `isolatedModules` 옵션을 적용해 해결했고, 저장소 tsconfig나 패키지 버전은 변경하지 않았다.
+- `pnpm exec jest --showConfig`로 설정 로딩을 확인했고, `pnpm test --runInBand`가 테스트 2개를 모두 통과했다.
 - Nx/Jest 충돌을 읽기 전용으로 조사했다. 두 Jest 설정 파일이 `@nx/jest`를 참조하지만 의존성·lockfile에 없고, `nx.json`, Nx 프로젝트 설정, 테스트 파일도 찾지 못했다. `jest`와 `ts-jest`는 설치돼 있다.
 - 백엔드 빌드, 오케스트레이터 빌드, 프런트엔드 TypeScript 타입 검사를 다시 실행해 모두 통과했다.
 - SNS provider 코드의 앱 자격증명 변수명, 요청 scope 및 콜백 경로를 확인했다. 제공자 콘솔의 앱 승인 상태나 실제 계정 연결은 확인하지 않았다.
 
 ## 검증 결과
 
-- 통과한 테스트: 이번 세션에서 실행된 Jest 테스트 없음 (테스트 파일 실행 전 설정 로드 실패).
-- 통과한 빌드/정적 검사: `pnpm run build:backend`, `pnpm run build:orchestrator`, `pnpm exec tsc -p apps/frontend/tsconfig.json --noEmit`.
-- 실패한 테스트: `source /workspace/.cloud-onboarding/activate.sh && pnpm test --runInBand`가 실패했다. Jest 설정 컴파일 단계에서 `jest.config.ts`의 `@nx/jest` import를 찾지 못해 종료됐고 테스트 파일은 실행되지 않았다.
+- 통과한 테스트: `pnpm test --runInBand` — 1개 suite, 2개 테스트 통과.
+- 통과한 설정 확인: `pnpm exec jest --showConfig`.
+- 통과한 빌드/정적 검사: 이번 체크포인트 시점에서는 아직 실행 전.
+- 해결한 선행 실패: 초기 설정은 `@nx/jest`를 찾지 못해 테스트 실행 전에 중단됐고, 기존 ts-jest type-check 실행은 힙 한도를 초과했다. 현재 독립 설정에선 두 문제가 재현되지 않았다.
 
 ## 미완료 작업 및 다음 단계
 
-- 독립 Jest 설정을 적용하고, helpers의 실제 환경 설정 검증 동작에 정상/오류 입력 테스트를 추가한다.
-- Jest 전체 실행, backend/orchestrator 빌드, frontend 타입 검사를 끝낸 뒤 결과를 기록하고 원격 SHA를 재검증한다.
+- backend/orchestrator 빌드와 frontend 타입 검사를 실행하고 결과를 이 기록에 반영한다.
+- 모든 필수 검증 후 최종 커밋/푸시 및 원격 SHA 일치를 확인한다.
 - SNS 제공자별 공식 앱 설정과 코드상 OAuth scope/callback 구성을 문서 대조한다. 실제 인증이나 게시 기능은 실행하지 않는다.
 
 ## 복구 안내

@@ -1,5 +1,4 @@
-import { getJestProjects } from '@nx/jest';
-
 export default {
-  projects: getJestProjects(),
+  preset: './jest.preset.js',
+  roots: ['<rootDir>/apps', '<rootDir>/libraries'],
 };

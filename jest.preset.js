@@ -1,3 +1,8 @@
-const nxPreset = require('@nx/jest/preset').default;
-
-module.exports = { ...nxPreset };
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  testMatch: ['**/*.spec.ts'],
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', { tsconfig: { isolatedModules: true } }],
+  },
+};
