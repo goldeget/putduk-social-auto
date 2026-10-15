@@ -13,7 +13,7 @@ const validConfig: DotenvParseOutput = {
 };
 
 const createChecker = (
-  overrides: Partial<DotenvParseOutput> = {}
+  overrides: Record<string, string> = {}
 ): ConfigurationChecker => {
   const checker = new ConfigurationChecker();
   checker.cfg = { ...validConfig, ...overrides };
