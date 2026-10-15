@@ -190,6 +190,69 @@ PY
     fi
   fi
 
+  if [[ -n "${WORKFLOW_ID:-}" ]]; then
+    echo '### Temporal workflow and worker evidence (allowlisted fields only)'
+    if [[ -s "${workflow_file:-}" ]]; then
+      printf 'Workflow ID under test: %s; parsed status: ' "$WORKFLOW_ID"
+      node scripts/step10-temporal-status.mjs "$workflow_file" 2>/dev/null || echo UNKNOWN
+    else
+      printf 'Workflow ID under test: %s; describe JSON unavailable.\n' "$WORKFLOW_ID"
+    fi
+    if [[ -s "${workflow_list_file:-}" ]]; then
+      python3 - "$workflow_list_file" "$WORKFLOW_ID" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    print('Exact workflow list result: invalid JSON.')
+else:
+    items = data if isinstance(data, list) else data.get('executions', data.get('workflowExecutions', [])) if isinstance(data, dict) else []
+    matches = [item for item in items if isinstance(item, dict) and item.get('execution', {}).get('workflowId', item.get('workflowId', item.get('workflow_id'))) == sys.argv[2]] if isinstance(items, list) else []
+    print(f'Exact workflow list result: {len(matches)} matching execution(s).')
+    for item in matches[:1]:
+        status = item.get('status', item.get('executionInfo', {}).get('status', 'UNKNOWN'))
+        print(f'Listed workflow status: {status}')
+PY
+    fi
+    if [[ -s "${task_queue_file:-}" ]]; then
+      python3 - "$task_queue_file" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    print('Main task queue result: invalid JSON.')
+else:
+    def find_pollers(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key.lower() == 'pollers': return item if isinstance(item, list) else [] if item is None else None
+                found = find_pollers(item)
+                if found is not None: return found
+        elif isinstance(value, list):
+            for item in value:
+                found = find_pollers(item)
+                if found is not None: return found
+        return None
+    pollers = find_pollers(data)
+    stats = data.get('stats', []) if isinstance(data, dict) else []
+    backlog = sum(item.get('approximateBacklogCount', 0) for item in stats if isinstance(item, dict) and item.get('taskQueueType') == 'workflow')
+    print(f'Main task queue recent pollers: {len(pollers) if pollers is not None else "not reported"}; workflow backlog: {backlog}.')
+PY
+    fi
+    if [[ -s "${workflow_error_file:-}" ]]; then
+      echo 'Temporal CLI error (redacted):'
+      sanitize_log "$workflow_error_file"
+    fi
+    if [[ -s "${workflow_list_error_file:-}" ]]; then
+      echo 'Temporal list CLI error (redacted):'
+      sanitize_log "$workflow_list_error_file"
+    fi
+    if [[ -s "${task_queue_error_file:-}" ]]; then
+      echo 'Temporal task-queue CLI error (redacted):'
+      sanitize_log "$task_queue_error_file"
+    fi
+  fi
+
   echo '### All isolated service current memory/CPU (container stats only)'
   mapfile -t diagnostic_containers < <(docker ps -q --filter "name=$PROJECT" 2>/dev/null || true)
   if ((${#diagnostic_containers[@]})); then
@@ -226,7 +289,7 @@ import re, sys
 lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()
 selected = []
 for line in lines:
-    if re.search(r'(?i)(^Failed integration phase:|status=|oom_killed=|restart_count=|^healthy$|^unhealthy$|^starting$|^end=.*exit=|^(frontend|backend|orchestrator):|^(3000|4200|5000):|Prisma result:|Bundled Prisma CLI|^Peak |^Sampled service|^Resource samples:|^Disk samples:|^Runner filesystem|^postiz[^| ]* cpu=|^Nginx upstream symptom samples:|^Postiz and PM2 logs:)', line):
+    if re.search(r'(?i)(^Failed integration phase:|^Workflow ID under test:|^Exact workflow list result:|^Listed workflow status:|^Main task queue (recent pollers|describe)|^Temporal describe exit code:|^Temporal workflow and worker evidence|status=|oom_killed=|restart_count=|^healthy$|^unhealthy$|^starting$|^end=.*exit=|^(frontend|backend|orchestrator):|^(3000|4200|5000):|Prisma result:|Bundled Prisma CLI|^Peak |^Sampled service|^Resource samples:|^Disk samples:|^Runner filesystem|^postiz[^| ]* cpu=|^Nginx upstream symptom samples:|^Postiz and PM2 logs:)', line):
         selected.append(line)
 errors = [line for line in lines if re.search(r'(?i)(error|fatal|exception|uncaught|out of memory|\bERR\b|\bWARN\b)', line)
           and not re.search(r'(?i)(connect\(\) failed|no live upstreams)', line)]
@@ -506,14 +569,84 @@ import json, sys
 r = json.load(open(sys.argv[1], encoding='utf-8'))
 if not r.get('posts') or r['posts'][0].get('state') != 'QUEUE': raise SystemExit('Scheduled post is not QUEUE.')
 PY
-workflow_file="$WORKDIR/temporal-describe.txt"
+workflow_file="$WORKDIR/temporal-describe.json"
+workflow_error_file="$WORKDIR/temporal-describe.stderr"
+workflow_list_file="$WORKDIR/temporal-list.json"
+workflow_list_error_file="$WORKDIR/temporal-list.stderr"
+task_queue_file="$WORKDIR/temporal-task-queue.json"
+task_queue_error_file="$WORKDIR/temporal-task-queue.stderr"
+workflow_status='UNKNOWN'
+workflow_describe_exit='not-run'
 for attempt in $(seq 1 45); do
-  if dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID" --address temporal:7233 > "$workflow_file" 2>/dev/null && \
-    grep -Eiq 'status[^[:alnum:]]+running|status:[[:space:]]*running' "$workflow_file"; then break; fi
-  if (( attempt == 45 )); then echo 'Temporal did not show the future workflow as running.' >&2; exit 1; fi
+  if dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID" --address temporal:7233 --output json > "$workflow_file" 2> "$workflow_error_file"; then
+    workflow_describe_exit=0
+    workflow_status="$(node scripts/step10-temporal-status.mjs "$workflow_file")"
+    if [[ "$workflow_status" == RUNNING ]]; then break; fi
+  else
+    workflow_describe_exit=$?
+    workflow_status='UNAVAILABLE'
+  fi
+  if (( attempt == 45 )); then
+    echo 'Temporal workflow did not reach RUNNING within the 90-second check window.' >&2
+    printf 'Temporal describe exit code: %s; parsed workflow status: %s\n' "$workflow_describe_exit" "$workflow_status" >&2
+    echo 'Querying the exact workflow ID and main task queue for independent evidence.' >&2
+    if dc exec -T temporal temporal workflow list --query "WorkflowId = '$WORKFLOW_ID'" --limit 1 --address temporal:7233 --output json > "$workflow_list_file" 2> "$workflow_list_error_file"; then
+      python3 - "$workflow_list_file" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    print('Exact workflow list query returned invalid JSON.')
+else:
+    items = data if isinstance(data, list) else data.get('executions', data.get('workflowExecutions', [])) if isinstance(data, dict) else []
+    print(f'Exact workflow list query succeeded; matching execution count: {len(items) if isinstance(items, list) else "unknown"}.')
+PY
+    else
+      list_exit=$?
+      printf 'Exact workflow list query exit code: %s\n' "$list_exit" >&2
+      sanitize_log "$workflow_list_error_file" >&2
+    fi
+    if dc exec -T temporal temporal task-queue describe --task-queue main --address temporal:7233 --output json > "$task_queue_file" 2> "$task_queue_error_file"; then
+      python3 - "$task_queue_file" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    print('Main task queue describe returned invalid JSON.')
+else:
+    def find_pollers(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key.lower() == 'pollers':
+                    return item if isinstance(item, list) else [] if item is None else None
+                found = find_pollers(item)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for item in value:
+                found = find_pollers(item)
+                if found is not None:
+                    return found
+        return None
+    pollers = find_pollers(data)
+    stats = data.get('stats', []) if isinstance(data, dict) else []
+    backlog = sum(item.get('approximateBacklogCount', 0) for item in stats if isinstance(item, dict) and item.get('taskQueueType') == 'workflow')
+    print(f'Main task queue describe succeeded; recent workflow pollers: {len(pollers) if pollers is not None else "not reported"}; workflow backlog: {backlog}.')
+PY
+    else
+      queue_exit=$?
+      printf 'Main task queue describe exit code: %s\n' "$queue_exit" >&2
+      sanitize_log "$task_queue_error_file" >&2
+    fi
+    if [[ -s "$workflow_error_file" ]]; then
+      echo 'Sanitized Temporal workflow describe error:' >&2
+      sanitize_log "$workflow_error_file" >&2
+    fi
+    exit 1
+  fi
   sleep 2
 done
-echo 'Image-backed schedule and Temporal timer passed; publish date is 30 days away.'
+echo "Image-backed schedule and Temporal timer passed; workflow status=$workflow_status; publish date is 30 days away."
 
 mark_phase 'restart Postiz and Temporal and verify scheduled state'
 echo 'Restarting Postiz and Temporal; checking that the post and timer survive.'
@@ -527,9 +660,11 @@ import json, sys
 r = json.load(open(sys.argv[1], encoding='utf-8'))
 if not r.get('posts') or r['posts'][0].get('state') != 'QUEUE': raise SystemExit('Scheduled post lost after restart.')
 PY
-if ! dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID" --address temporal:7233 > "$workflow_file" 2>/dev/null || \
-   ! grep -Eiq 'status[^[:alnum:]]+running|status:[[:space:]]*running' "$workflow_file"; then
-  echo 'Temporal timer did not survive restart.' >&2
+if ! dc exec -T temporal temporal workflow describe --workflow-id "$WORKFLOW_ID" --address temporal:7233 --output json > "$workflow_file" 2> "$workflow_error_file" || \
+   [[ "$(node scripts/step10-temporal-status.mjs "$workflow_file")" != RUNNING ]]; then
+  workflow_status="$(node scripts/step10-temporal-status.mjs "$workflow_file" 2>/dev/null || echo UNKNOWN)"
+  printf 'Temporal timer did not survive restart; parsed status=%s.\n' "$workflow_status" >&2
+  sanitize_log "$workflow_error_file" >&2
   exit 1
 fi
 echo 'Postiz scheduled record and Temporal timer survived restart.'

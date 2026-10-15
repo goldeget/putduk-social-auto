@@ -63,6 +63,24 @@ type PostWithConditionals = Post & {
   childrenPost: Post[];
 };
 
+function safeTemporalError(error: unknown) {
+  const name = error instanceof Error ? error.name : 'UnknownError';
+  let message = error instanceof Error ? error.message : String(error);
+  message = message
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1[REDACTED]@')
+    .replace(
+      /\b(password|token|authorization|cookie|secret|api[_-]?key)(\s*[:=]\s*)(?:Bearer\s+)?[^\s,;]+/gi,
+      '$1$2[REDACTED]'
+    )
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(
+      /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g,
+      '[REDACTED_JWT]'
+    )
+    .slice(0, 400);
+  return `${name}: ${message}`;
+}
+
 @Injectable()
 export class PostsService {
   private storage = UploadFactory.createStorage();
@@ -958,7 +976,14 @@ export class PostsService {
             },
           ]),
         });
-    } catch (err) {}
+    } catch (err) {
+      // A queued post without a Temporal execution is invisible to the user.
+      // Keep the API behavior unchanged for now, but retain a redacted cause in
+      // service logs so Temporal scheduling failures can be diagnosed.
+      console.error(
+        `Temporal workflow start failed for post ${postId}: ${safeTemporalError(err)}`
+      );
+    }
   }
 
   /**
