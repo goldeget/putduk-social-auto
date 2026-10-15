@@ -1,6 +1,6 @@
 # Temporary GitHub Actions overlay only. Never use this file for production.
-# It disables Caddy, binds the app to the runner's loopback interface, blocks
-# application egress, and applies an 8.75 GiB / 5 CPU service cap to leave
+# It disables Caddy, publishes no service ports, blocks application egress,
+# and applies an 8.75 GiB / 5 CPU service cap to leave
 # headroom for the host on the proposed 12 GB / 6 vCPU VPS.
 services:
   caddy:
@@ -22,8 +22,6 @@ services:
       DISABLE_REGISTRATION: "false"
       NOT_SECURED: "true"
       EMAIL_PROVIDER: ""
-    ports:
-      - "127.0.0.1:5500:5000"
     volumes:
       - ${STEP10_EMPTY_DOTENV:?Set STEP10_EMPTY_DOTENV}:/app/.env:ro
     mem_limit: 4g

@@ -19,6 +19,7 @@ on:
       - scripts/pm2-start-order.test.mjs
       - scripts/backend-readiness.mjs
       - scripts/backend-readiness.test.mjs
+      - scripts/step10-network-access.test.mjs
       - var/docker/nginx.conf
 
 permissions:
@@ -42,8 +43,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Verify PM2 startup and backend readiness polling
-        run: node --test scripts/pm2-start-order.test.mjs scripts/backend-readiness.test.mjs
+      - name: Verify PM2 startup, backend readiness, and isolated network access
+        run: node --test scripts/pm2-start-order.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs
 
       - name: Record runner resources before build
         run: |

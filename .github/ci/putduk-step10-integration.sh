@@ -140,6 +140,7 @@ PY
 }
 
 postiz_failure_diagnostics() {
+  printf 'Failed integration phase: %s\n' "$CURRENT_PHASE"
   echo '### Postiz container state (selected fields only)'
   local container
   container="$(dc ps -q postiz 2>/dev/null || true)"
@@ -211,6 +212,7 @@ on_exit() {
   local status=$?
   stop_sampler
   if (( status != 0 )); then
+    printf '::error title=Step 10 integration failed::phase=%s; exit_code=%s\n' "$CURRENT_PHASE" "$status"
     echo '### Failure diagnostics collected before the workflow cleanup step'
     postiz_failure_diagnostics > "$WORKDIR/sanitized-failure-diagnostics.txt" 2>&1 || true
     cat "$WORKDIR/sanitized-failure-diagnostics.txt"
@@ -224,7 +226,7 @@ import re, sys
 lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()
 selected = []
 for line in lines:
-    if re.search(r'(?i)(status=|oom_killed=|restart_count=|^healthy$|^unhealthy$|^starting$|^end=.*exit=|^(frontend|backend|orchestrator):|^(3000|4200|5000):|Prisma result:|Bundled Prisma CLI|^Peak |^Sampled service|^Resource samples:|^Disk samples:|^Runner filesystem|^postiz[^| ]* cpu=|^Nginx upstream symptom samples:|^Postiz and PM2 logs:)', line):
+    if re.search(r'(?i)(^Failed integration phase:|status=|oom_killed=|restart_count=|^healthy$|^unhealthy$|^starting$|^end=.*exit=|^(frontend|backend|orchestrator):|^(3000|4200|5000):|Prisma result:|Bundled Prisma CLI|^Peak |^Sampled service|^Resource samples:|^Disk samples:|^Runner filesystem|^postiz[^| ]* cpu=|^Nginx upstream symptom samples:|^Postiz and PM2 logs:)', line):
         selected.append(line)
 errors = [line for line in lines if re.search(r'(?i)(error|fatal|exception|uncaught|out of memory|\bERR\b|\bWARN\b)', line)
           and not re.search(r'(?i)(connect\(\) failed|no live upstreams)', line)]
@@ -306,26 +308,63 @@ const assertResponse = async (name, url, expectedStatus) => {
 echo 'All three Postiz HTTP endpoints responded with expected statuses.'
 
 app_container="$(dc ps -q postiz)"
-if ! app_binding="$(docker port "$app_container" 5000/tcp 2>&1)"; then
-  echo 'Could not inspect Postiz host-port binding for 5000/tcp.' >&2
-  exit 1
-fi
-if [[ "$app_binding" != '127.0.0.1:5500' ]]; then
-  echo "Postiz host-port binding mismatch: expected 127.0.0.1:5500, observed ${app_binding:-<none>}." >&2
-  exit 1
-fi
+edge_network="${PROJECT}_edge"
+app_networks_json="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$app_container")"
+POSTIZ_EDGE_IP="$(python3 - "$edge_network" "$app_networks_json" <<'PY'
+import ipaddress, json, sys
+edge_name, raw = sys.argv[1:]
+networks = json.loads(raw)
+entry = networks.get(edge_name)
+if not entry or not entry.get('IPAddress'):
+    raise SystemExit('Postiz is not attached to its isolated edge network.')
+try:
+    address = ipaddress.ip_address(entry['IPAddress'])
+except ValueError:
+    raise SystemExit('Postiz edge network did not provide a valid private IP.')
+if address.version != 4 or not address.is_private:
+    raise SystemExit('Postiz edge network address is not a private IPv4 address.')
+print(address)
+PY
+)"
+mapfile -t postiz_networks < <(python3 - "$app_networks_json" <<'PY'
+import json, sys
+for name in json.loads(sys.argv[1]): print(name)
+PY
+)
+for network in "${postiz_networks[@]}"; do
+  internal="$(docker network inspect --format '{{.Internal}}' "$network")"
+  [[ "$internal" == true ]] || { echo "Postiz network is not egress-isolated: $network" >&2; exit 1; }
+done
+app_port_state="$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$app_container")"
+python3 - "$app_port_state" <<'PY'
+import json, sys
+ports = json.loads(sys.argv[1]) or {}
+published = {name: bindings for name, bindings in ports.items() if bindings}
+if published:
+    raise SystemExit(f'Unexpected Postiz host-published ports: {published}')
+PY
+echo "Postiz has no host-published ports; test traffic will use its private edge IP ${POSTIZ_EDGE_IP}."
+
+postiz_curl() {
+  curl --connect-to "127.0.0.1:5500:${POSTIZ_EDGE_IP}:5000" "$@"
+}
+
 for service in postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal; do
   container="$(dc ps -q "$service")"
-  if ! published_ports="$(docker port "$container" 2>&1)"; then
-    echo "Could not inspect published ports for $service." >&2
-    exit 1
-  fi
-  [[ -z "$published_ports" ]] || { echo "$service published host ports: $published_ports." >&2; exit 1; }
+  port_state="$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$container")"
+  python3 - "$service" "$port_state" <<'PY'
+import json, sys
+service, raw = sys.argv[1:]
+ports = json.loads(raw) or {}
+published = {name: bindings for name, bindings in ports.items() if bindings}
+if published:
+    raise SystemExit(f'{service} unexpectedly publishes host ports: {published}')
+PY
 done
-echo 'All six required services healthy; Caddy and internal service host ports are not exposed.'
+echo 'All six required services healthy; no host ports are published and all Postiz networks are internal.'
 
 mark_phase 'login page, synthetic registration, and authenticated dashboard'
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/login.html" -w '%{http_code}' "$BASE_URL/auth/login")"
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/login.html" -w '%{http_code}' "$BASE_URL/auth/login")"
 [[ "$http" == 200 ]] || { echo "Login page returned HTTP $http." >&2; exit 1; }
 echo 'Login page: HTTP 200.'
 
@@ -341,7 +380,7 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
                'provider': 'LOCAL', 'company': 'PUTDUK CI Test'}, f)
 PY
 chmod 600 "$WORKDIR/register.json"
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/register-response.json" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/register-response.json" \
   -c "$WORKDIR/cookies.txt" -H 'Content-Type: application/json' \
   --data-binary "@$WORKDIR/register.json" -w '%{http_code}' "$BASE_URL/api/auth/register")"
 [[ "$http" == 200 ]] || { echo "Test registration returned HTTP $http." >&2; exit 1; }
@@ -350,7 +389,7 @@ import json, sys
 if json.load(open(sys.argv[1], encoding='utf-8')).get('register') is not True:
     raise SystemExit('Test account registration response was not successful.')
 PY
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/login-response.json" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/login-response.json" \
   -b "$WORKDIR/cookies.txt" -c "$WORKDIR/cookies.txt" -H 'Content-Type: application/json' \
   --data-binary "@$WORKDIR/register.json" -w '%{http_code}' "$BASE_URL/api/auth/login")"
 [[ "$http" == 200 ]] || { echo "Test login returned HTTP $http." >&2; exit 1; }
@@ -359,10 +398,10 @@ import json, sys
 if json.load(open(sys.argv[1], encoding='utf-8')).get('login') is not True:
     raise SystemExit('Test account login response was not successful.')
 PY
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/self.json" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/self.json" \
   -b "$WORKDIR/cookies.txt" -w '%{http_code}' "$BASE_URL/api/user/self")"
 [[ "$http" == 200 ]] || { echo "Authenticated dashboard API returned HTTP $http." >&2; exit 1; }
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/dashboard.html" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/dashboard.html" \
   -b "$WORKDIR/cookies.txt" -w '%{http_code}' "$BASE_URL/settings")"
 [[ "$http" == 200 && -s "$WORKDIR/dashboard.html" ]] || { echo "Authenticated settings dashboard returned HTTP $http." >&2; exit 1; }
 read -r TEST_USER_ID TEST_ORG_ID < <(python3 - "$WORKDIR/self.json" <<'PY'
@@ -402,7 +441,7 @@ PY
 
 draft_date="$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%S.000Z)"
 write_post_payload "$WORKDIR/draft.json" draft "$draft_date" '[]' null "CI-only draft ${GITHUB_RUN_ID}"
-http="$(curl --silent --show-error --max-time 45 -o "$WORKDIR/draft-response.json" \
+http="$(postiz_curl --silent --show-error --max-time 45 -o "$WORKDIR/draft-response.json" \
   -b "$WORKDIR/cookies.txt" -H 'Content-Type: application/json' \
   --data-binary "@$WORKDIR/draft.json" -w '%{http_code}' "$BASE_URL/api/posts")"
 [[ "$http" == 200 || "$http" == 201 ]] || { echo "Draft create returned HTTP $http." >&2; exit 1; }
@@ -413,7 +452,7 @@ if not isinstance(r, list) or not r or not r[0].get('postId'): raise SystemExit(
 print(r[0]['postId'])
 PY
 )"
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/draft-read.json" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/draft-read.json" \
   -b "$WORKDIR/cookies.txt" -w '%{http_code}' "$BASE_URL/api/posts/$DRAFT_ID")"
 [[ "$http" == 200 ]]
 python3 - "$WORKDIR/draft-read.json" <<'PY'
@@ -425,7 +464,7 @@ echo 'Postiz draft creation/read-back passed.'
 
 mark_phase 'upload fake image, schedule post, and verify Temporal timer'
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=' | base64 -d > "$WORKDIR/test.png"
-http="$(curl --silent --show-error --max-time 60 -o "$WORKDIR/upload.json" \
+http="$(postiz_curl --silent --show-error --max-time 60 -o "$WORKDIR/upload.json" \
   -b "$WORKDIR/cookies.txt" -F "file=@$WORKDIR/test.png;type=image/png" \
   -w '%{http_code}' "$BASE_URL/api/media/upload-simple")"
 [[ "$http" == 200 ]] || { echo "Test image upload returned HTTP $http." >&2; exit 1; }
@@ -443,7 +482,7 @@ UPLOAD_RELATIVE_PATH="${MEDIA_PATH#"$BASE_URL"/uploads/}"
 scheduled_date="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%S.000Z)"
 image_json="$(python3 -c 'import json,sys; print(json.dumps([{"id":sys.argv[1],"path":sys.argv[2]}]))' "$MEDIA_ID" "$MEDIA_PATH")"
 write_post_payload "$WORKDIR/schedule.json" schedule "$scheduled_date" "$image_json" '{"post_type":"post"}' "CI-only scheduled ${GITHUB_RUN_ID}"
-http="$(curl --silent --show-error --max-time 60 -o "$WORKDIR/schedule-response.json" \
+http="$(postiz_curl --silent --show-error --max-time 60 -o "$WORKDIR/schedule-response.json" \
   -b "$WORKDIR/cookies.txt" -H 'Content-Type: application/json' \
   --data-binary "@$WORKDIR/schedule.json" -w '%{http_code}' "$BASE_URL/api/posts")"
 [[ "$http" == 200 || "$http" == 201 ]] || { echo "Test scheduling returned HTTP $http." >&2; exit 1; }
@@ -456,7 +495,7 @@ PY
 )"
 [[ "$SCHEDULED_ID" =~ ^[A-Za-z0-9]+$ ]]
 WORKFLOW_ID="post_${SCHEDULED_ID}"
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/schedule-read.json" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/schedule-read.json" \
   -b "$WORKDIR/cookies.txt" -w '%{http_code}' "$BASE_URL/api/posts/$SCHEDULED_ID")"
 [[ "$http" == 200 ]]
 python3 - "$WORKDIR/schedule-read.json" <<'PY'
@@ -477,7 +516,7 @@ mark_phase 'restart Postiz and Temporal and verify scheduled state'
 echo 'Restarting Postiz and Temporal; checking that the post and timer survive.'
 dc restart postiz temporal >/dev/null
 dc up -d --wait --wait-timeout 900 postiz temporal >/dev/null
-http="$(curl --silent --show-error --max-time 30 -o "$WORKDIR/schedule-after-restart.json" \
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/schedule-after-restart.json" \
   -b "$WORKDIR/cookies.txt" -w '%{http_code}' "$BASE_URL/api/posts/$SCHEDULED_ID")"
 [[ "$http" == 200 ]]
 python3 - "$WORKDIR/schedule-after-restart.json" <<'PY'
@@ -641,7 +680,7 @@ printf '%s\n' "$stats_summary"
 ### PUTDUK Step 10 integration results
 
 - Source revision: $GITHUB_SHA
-- Six services healthy; Caddy excluded; only 127.0.0.1 published
+- Six services healthy; Caddy excluded; no host ports published; Postiz is reached from the runner through its private IP on an internal network
 - Test registration/login and dashboard API: passed (synthetic .invalid account)
 - Draft create/read-back: passed
 - Future schedule and Temporal workflow: passed; terminated before publish activity
@@ -659,4 +698,4 @@ notice_metrics="$(printf '%s' "$stats_summary" | tr '\r\n' '  ')"
 notice_metrics="${notice_metrics//'%'/'%25'}"
 notice_metrics="${notice_metrics//$'\r'/'%0D'}"
 notice_metrics="${notice_metrics//$'\n'/'%0A'}"
-printf '::notice title=Step 10 integration passed::Six services healthy; frontend/backend/orchestrator PM2 online; direct HTTP checks on 3000, 4200, 5000 passed; login, draft, image upload, schedule, Temporal timer, restart, and isolated backup/restore checks passed. %s\n' "$notice_metrics"
+printf '::notice title=Step 10 integration passed::Six services healthy; no host ports published; frontend/backend/orchestrator PM2 online; HTTP checks on 3000, 4200, 5000 passed; login, draft, image upload, schedule, Temporal timer, restart, and isolated backup/restore checks passed. %s\n' "$notice_metrics"

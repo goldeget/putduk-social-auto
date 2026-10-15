@@ -40,9 +40,10 @@ test('operational and isolated startup register all PM2 apps sequentially throug
   assert.match(integrationScript, /Step 10 integration passed/);
 });
 
-test('isolated Postiz HTTP access remains loopback-only and service network remains internal', () => {
-  assert.match(integrationCompose, /127\.0\.0\.1:5500:5000/);
+test('isolated Postiz HTTP access stays unpublished and uses its internal edge network', () => {
+  assert.doesNotMatch(integrationCompose, /^\s+ports:/m);
   assert.match(integrationCompose, /networks:\s+edge:\s+internal:\s+true/);
-  assert.match(integrationScript, /Could not inspect Postiz host-port binding/);
-  assert.match(integrationScript, /Could not inspect published ports for/);
+  assert.match(integrationScript, /NetworkSettings\.Ports/);
+  assert.match(integrationScript, /Postiz has no host-published ports/);
+  assert.match(integrationScript, /--connect-to\s+"127\.0\.0\.1:5500:\$\{POSTIZ_EDGE_IP\}:5000"/);
 });
