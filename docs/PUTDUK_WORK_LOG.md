@@ -272,3 +272,12 @@
 - push가 workflow의 `work` 브랜치 및 변경 경로 조건을 만족하므로 자동 통합 실행이 예상되지만, 이 실행 환경에서 GitHub Actions run ID/상태/로그는 확인하지 못했다. `gh auth status`는 현재 인증 토큰이 유효하지 않다고 보고했고, GitHub API 조회는 네트워크 프록시에서 HTTP CONNECT 403으로 차단됐다. 따라서 Actions 통합 결과는 **UNVERIFIED**이며, 성공으로 판정하지 않는다. 최대 1회 제한을 지키기 위해 수동 재실행하지 않는다.
 - 확인 위치: https://github.com/goldeget/putduk-social-auto/actions/workflows/putduk-docker-build-check.yml?query=branch%3Awork . 실행이 실제로 완료됐는지는 해당 Actions 기록에서 확인해야 한다.
 - GitHub 원격 `work` SHA는 코드 체크포인트 push 직후 `761d42c8c83bcf673cb0bbe767db7b9999b18b42`와 일치했다. 이 기록 추가 후 최종 원격 SHA는 완료 보고서와 재조회 결과에 기재한다. 새 전체 통합 실행 결과가 확인되기 전 운영 구매 판정은 **NO-GO**다.
+
+## Temporal 종료 명령 주소 보완 — 2026-10-16
+
+- 시작 시 저장소 `goldeget/putduk-social-auto`, 브랜치 `work`, 로컬·원격 SHA `2d85ca373d2f6b9449d83f5959308f20039eb4c9`가 일치하고 작업 트리가 깨끗한 것을 확인했다. 기준 이후 원격 변경은 없었다.
+- 사용자가 전달한 Actions `38869461144` 로그 판정은 Elasticsearch 스냅샷 `SUCCESS`, 실행별 임시 자원 정리 성공, 마지막 Temporal workflow terminate 단계에서 `[::1]:7233` 연결 거부다. 기존 종료 명령만 `--address temporal:7233`이 빠져 있었다. 같은 스크립트의 workflow describe/list/task-queue describe 명령은 모두 이 주소를 명시한다.
+- `scripts/step10-temporal-terminate.test.mjs`를 먼저 추가해 기존 명령에서 실패하는 RED 결과를 재현했다. 종료 명령에 `--address temporal:7233`을 추가한 뒤 테스트가 통과한다. `.github/workflows/putduk-docker-build-check.yml`에 새 테스트 파일의 경로 및 테스트 실행을 연결했다. 운영 Compose, 앱 코드, 로그인·예약·백업 경로는 변경하지 않았다.
+- 별도 internal Docker 네트워크에서 기존 캐시된 Temporal CLI 이미지로 개발용 Temporal 서버를 격리 실행했다. CLI가 시작/종료/조회 서버에 도달하는지 확인했고, 테스트 Workflow를 생성한 뒤 `temporal workflow terminate --address temporal:7233 ...`로 종료, 새 describe 결과에서 `WORKFLOW_EXECUTION_STATUS_TERMINATED`를 확인했다. 테스트 컨테이너와 네트워크만 정리했으며 기존 `postiz-cloud-*`와 `trusting_nightingale` 자원은 보존했다. 테스트 CLI 컨테이너에서 실행기 프록시 환경변수를 비워야 Docker 내부 DNS 주소로 연결됨도 확인했다.
+- 기존 Step 10 회귀 테스트 전체와 신규 테스트는 40/40 통과했다. `bash -n .github/ci/putduk-step10-integration.sh`, workflow YAML 파싱, `git diff --check`도 통과했다. 전체 통합 실행은 아직 수행하지 않았다.
+- 변경 후 자동 실행될 무료 GitHub Actions 통합 테스트가 이번 단계의 유일한 전체 실행이다. 실행 결과는 실제로 조회·확인될 때까지 미검증으로 처리한다. Actions가 확인되지 않으면 수동 재실행하지 않는다. 운영 서버 구매 판정은 **NO-GO**다.

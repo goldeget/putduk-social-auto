@@ -819,7 +819,7 @@ printf '%s' "$snapshot_response" > "$snapshot_response_file"
 node scripts/step10-es-snapshot-response.mjs "$snapshot_http_status" "$snapshot_response_file"
 
 echo 'Terminating the far-future test workflow before stopping its worker services.'
-dc exec -T temporal temporal workflow terminate --workflow-id "$WORKFLOW_ID" --reason 'PUTDUK Step 10 CI cleanup' >/dev/null
+dc exec -T temporal temporal workflow terminate --address temporal:7233 --workflow-id "$WORKFLOW_ID" --reason 'PUTDUK Step 10 CI cleanup' >/dev/null
 dc stop postiz temporal temporal-elasticsearch >/dev/null
 
 es_restore="${PROJECT}-es-restore"
