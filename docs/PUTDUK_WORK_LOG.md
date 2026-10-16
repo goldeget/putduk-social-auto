@@ -281,3 +281,5 @@
 - 별도 internal Docker 네트워크에서 기존 캐시된 Temporal CLI 이미지로 개발용 Temporal 서버를 격리 실행했다. CLI가 시작/종료/조회 서버에 도달하는지 확인했고, 테스트 Workflow를 생성한 뒤 `temporal workflow terminate --address temporal:7233 ...`로 종료, 새 describe 결과에서 `WORKFLOW_EXECUTION_STATUS_TERMINATED`를 확인했다. 테스트 컨테이너와 네트워크만 정리했으며 기존 `postiz-cloud-*`와 `trusting_nightingale` 자원은 보존했다. 테스트 CLI 컨테이너에서 실행기 프록시 환경변수를 비워야 Docker 내부 DNS 주소로 연결됨도 확인했다.
 - 기존 Step 10 회귀 테스트 전체와 신규 테스트는 40/40 통과했다. `bash -n .github/ci/putduk-step10-integration.sh`, workflow YAML 파싱, `git diff --check`도 통과했다. 전체 통합 실행은 아직 수행하지 않았다.
 - 변경 후 자동 실행될 무료 GitHub Actions 통합 테스트가 이번 단계의 유일한 전체 실행이다. 실행 결과는 실제로 조회·확인될 때까지 미검증으로 처리한다. Actions가 확인되지 않으면 수동 재실행하지 않는다. 운영 서버 구매 판정은 **NO-GO**다.
+- 코드·테스트 체크포인트 커밋 `3932db505d036291f225c0141dd123d60c1fb130`을 `work`에 push했고, 직후 `git ls-remote`에서 원격 SHA가 로컬과 일치함을 확인했다. 이 변경으로 workflow가 자동 시작되는 조건이다.
+- Actions 실행 조회는 이 환경의 GitHub API 프록시 `CONNECT 403` 차단과 유효하지 않은 `GH_TOKEN` 때문에 확인하지 못했다. 따라서 통합 실행 ID·결과는 **미검증**이며, 수동 재실행하지 않는다. 확인 위치는 https://github.com/goldeget/putduk-social-auto/actions/workflows/putduk-docker-build-check.yml?query=branch%3Awork 이다.
