@@ -15,7 +15,7 @@ set -Eeuo pipefail
 if [[ "$1 $2" == "image inspect" ]]; then
   if [[ "${3:-}" == "--format" ]]; then
         cat <<JSON
-[{"Id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Os":"linux","Architecture":"${MOCK_ARCH:-amd64}","Config":{"Labels":{"org.opencontainers.image.revision":"${MOCK_REVISION:-62ed3585f9b2227a7956950c809b7140478efc90}","org.opencontainers.image.source":"https://github.com/goldeget/putduk-social-auto"},"Env":${MOCK_ENV:-[]}}}]
+  [{"Id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Os":"linux","Architecture":"${MOCK_ARCH:-amd64}","Config":{"User":"${MOCK_USER:-www:www}","Labels":{"org.opencontainers.image.revision":"${MOCK_REVISION:-62ed3585f9b2227a7956950c809b7140478efc90}","org.opencontainers.image.source":"https://github.com/goldeget/putduk-social-auto"},"Env":${MOCK_ENV:-[]}}}]
 JSON
   fi
   exit 0
@@ -46,6 +46,7 @@ run_case() {
 run_case pass
 run_case fail MOCK_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 run_case fail MOCK_ARCH=arm64
+run_case fail MOCK_USER=root
 run_case fail MOCK_ENV='["OPENAI_API_KEY=mock-secret-value"]'
 run_case fail MOCK_HISTORY='/bin/sh -c #(nop) ENV OPENAI_API_KEY=mock-secret-value'
 run_case fail MOCK_RUN_FAIL=1

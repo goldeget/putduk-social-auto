@@ -2,14 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const compose = readFileSync(new URL('../.github/ci/docker-compose.step10-test.yaml', import.meta.url), 'utf8');
+const compose = readFileSync(new URL('../docker-compose.production.yaml', import.meta.url), 'utf8');
+const integrationCompose = readFileSync(new URL('../.github/ci/docker-compose.step10-test.yaml', import.meta.url), 'utf8');
 const integration = readFileSync(new URL('../.github/ci/putduk-step10-integration.sh', import.meta.url), 'utf8');
-const postizService = compose.match(/\n  postiz:\n([\s\S]*?)(?=\n  [a-zA-Z0-9_-]+:\n|\nnetworks:)/)?.[1];
+const postizService = compose.match(/\r?\n  postiz:\r?\n([\s\S]*?)(?=\r?\n  [a-zA-Z0-9_-]+:\r?\n|\r?\nnetworks:)/)?.[1];
 
 test('internal CI network keeps Postiz unpublished and host tests connect through its private IP', () => {
   assert.ok(postizService, 'CI Compose must define the Postiz service');
   assert.doesNotMatch(postizService, /^\s+ports:/m);
-  assert.match(compose, /edge:\s*internal:\s+true/);
+  assert.match(integrationCompose, /edge:\s*internal:\s+true/);
   assert.match(integration, /POSTIZ_EDGE_IP=/);
   assert.match(integration, /--connect-to\s+"127\.0\.0\.1:5500:\$\{POSTIZ_EDGE_IP\}:5000"/);
   assert.match(integration, /docker inspect --format .*NetworkSettings\.Ports/);

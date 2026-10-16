@@ -82,6 +82,7 @@ def main() -> int:
             image.get("Architecture", ""),
             labels.get("org.opencontainers.image.revision", ""),
             labels.get("org.opencontainers.image.source", ""),
+            config.get("User", ""),
         ]
         print("\n".join(str(value) for value in values))
         return 0

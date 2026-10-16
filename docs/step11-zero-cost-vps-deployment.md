@@ -41,7 +41,7 @@ VPS에서 공개 `work` 브랜치의 검증된 정확한 SHA를 가져와 해당
 
 ## 보안 및 운영 위험
 
-- 현재 `Dockerfile.dev`는 `USER`를 지정하지 않아 root 기본 사용자로 실행하며, 전역 PM2 버전 및 Node base image digest가 고정되지 않았다. 알려진 Step 10 상태를 보존하기 위해 이번 변경에서는 Dockerfile을 수정하지 않았다. 비 root 실행, PM2/base digest 고정은 별도 변경과 통합 재검증이 필요한 **운영 차단 항목**이다. Docker socket 접근은 root 권한과 동등하게 취급한다.
+- Dockerfile은 Node 22.20 Bookworm Slim의 공식 multi-platform index digest와 PM2 7.0.4를 고정하고, 최종 컨테이너 사용자를 `www:www`로 지정한다. Nginx는 내부 5000 포트로 계속 서비스하며 PID/임시 파일은 `/tmp/nginx`, 로그는 stdout/stderr로 보낸다. PM2 상태 디렉터리는 `/www/.pm2`, 업로드·config 디렉터리는 `www` 소유다. 신규 named upload volume은 Docker의 초기 복사 동작으로 이 소유권을 받을 수 있지만, 기존 root 소유 volume의 권한 상태는 실제 서버에서 확인 전까지 **UNKNOWN**이다. 기존 데이터 volume 권한을 자동 변경하지 않는다. 비-root runtime은 volume write, PM2 실행 및 실제 HTTP/upload를 서버 검증 전까지 완전히 입증한 것으로 간주하지 않는다. Docker socket 접근은 root 권한과 동등하게 취급한다.
 - Production Compose는 Caddy 80/443만 노출하고 Postiz는 내부 네트워크에서만 노출한다. DB, Redis, Temporal, Elasticsearch 포트를 인터넷에 공개하지 않는다. HTTPS 인증서와 실제 DNS/HTTPS 운영은 서버·도메인 확보 뒤 검증한다.
 - 가입 차단(`DISABLE_REGISTRATION=true`)은 유지한다. 최초 관리자 설정은 일시적인 관리 전용 VPN/SSH tunnel 또는 제한된 네트워크에서 진행한다. OAuth callback은 Meta/Google/TikTok 외부에서 HTTPS로 호출되어야 하므로 전체 사이트에 IP 제한이나 기본 인증을 걸면 콜백이 실패할 수 있다. 경로별 예외/보호 규칙을 실제 provider callback 경로를 확인하기 전에는 설정하지 않는다.
 - Provider OAuth client secret, access/refresh token, DB 자격증명, `OPENAI_API_KEY` 등은 root 전용 권한(예: 0600)인 서버 외부 `.env.production` 또는 검증된 secret store에만 둔다. 명령행 인수, 이미지 build args/레이어, Git, 로그에 넣지 않는다. 현재 OpenAI 키가 production Compose에서 앱으로 전달되지 않으므로 overlay가 런타임 환경변수로만 선택 전달한다.
@@ -67,5 +67,5 @@ VPS에서 공개 `work` 브랜치의 검증된 정확한 SHA를 가져와 해당
 ### B. 구매 후 실제 공개 운영 전에 필요한 검증
 
 - 실제 가용 RAM/디스크와 Docker build peak, image 검사, HTTPS 인증서, OAuth callback/관리 접근 제어, 외부 백업과 복원, 장시간 안정성을 실제 대상에서 확인한다.
-- 현재 이미지의 root 실행, PM2/base image pin 미완료는 공개 운영 차단 항목으로 별도 변경·검증한다. 구매 전에 임의로 코드를 바꾸지 않았다.
+- 이번 변경은 이미지의 기본 root 실행을 막고 Node digest·PM2 버전을 고정한다. 구매 후에는 실제 volume 소유권과 업로드 쓰기, Nginx/PM2 기동, HTTPS 및 복원 시험을 확인해야 한다.
 - 서버 구매는 공개 운영 승인을 뜻하지 않는다. 공개 운영 판정은 **NO-GO**이며 위 항목과 계정 연결·provider 설정 등 별도 준비가 완료되어야 한다.

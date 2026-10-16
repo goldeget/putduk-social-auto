@@ -9,6 +9,10 @@ const dockerfile = readFileSync(
   new URL('../Dockerfile.dev', import.meta.url),
   'utf8'
 );
+const nginx = readFileSync(
+  new URL('../var/docker/nginx.conf', import.meta.url),
+  'utf8'
+);
 const integrationCompose = readFileSync(
   new URL('../.github/ci/docker-compose.step10-test.yaml', import.meta.url),
   'utf8'
@@ -58,6 +62,15 @@ test('Step 10 applies schema once before starting Postiz with its default comman
 
 test('Docker image installs only the exact lockfile dependency graph', () => {
   assert.match(dockerfile, /^RUN pnpm install --frozen-lockfile$/m);
+  assert.match(dockerfile, /^FROM node:22\.20-bookworm-slim@sha256:[a-f0-9]{64}$/m);
+  assert.match(dockerfile, /pm2@7\.0\.4/);
+  assert.match(dockerfile, /^USER www:www$/m);
+  assert.match(dockerfile, /^CMD \["sh", "-c", "nginx && pnpm run pm2"\]$/m);
+  assert.match(nginx, /^\s*listen 5000;$/m);
+  assert.match(nginx, /^\s*pid\s+\/tmp\/nginx\/nginx\.pid;$/m);
+  assert.match(nginx, /^\s*access_log\s+\/dev\/stdout;$/m);
+  assert.match(nginx, /^\s*error_log\s+\/dev\/stderr warn;$/m);
+  assert.match(dockerfile, /\/app\/apps\/frontend\/\.next\/cache/);
   assert.match(
     rootPackage.scripts['prisma-generate'],
     /^pnpm exec prisma generate /

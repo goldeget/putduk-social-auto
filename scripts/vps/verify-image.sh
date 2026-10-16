@@ -19,17 +19,19 @@ os="${fields[1]:-}"
 arch="${fields[2]:-}"
 revision="${fields[3]:-}"
 source="${fields[4]:-}"
+image_user="${fields[5]:-}"
 [[ "$os/$arch" == linux/amd64 ]] || fail "이미지 플랫폼이 linux/amd64가 아닙니다: $os/$arch"
 [[ "$revision" == "$sha" ]] || fail "OCI revision이 입력 SHA와 다릅니다."
 [[ "$source" == https://github.com/goldeget/putduk-social-auto ]] || fail "OCI source가 예상 저장소와 다릅니다."
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Docker image ID를 확인할 수 없습니다."
+[[ -n "$image_user" && "$image_user" != 0 && "$image_user" != root && "$image_user" != 0:0 && "$image_user" != root:root ]] || fail "이미지 기본 사용자 설정이 비-root가 아닙니다."
 
 if ! "$DOCKER_BIN" image history --no-trunc --format '{{.CreatedBy}}' "$image" 2>/dev/null | "$PYTHON_BIN" "$SCRIPT_DIR/inspect-image-metadata.py" history >/dev/null; then
   fail "이미지 빌드 이력에 비밀정보가 있을 수 있습니다. 원문은 출력하지 않았습니다."
 fi
 
 # Inspect only; do not start the application or attach a network.
-"$DOCKER_BIN" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 256m --user 65534:65534 --entrypoint node "$image" -e '
+"$DOCKER_BIN" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 256m --user "$image_user" --entrypoint node "$image" -e '
 const fs = require("node:fs"), path = require("node:path");
 const roots = ["/app", "/opt", "/usr/src/app"].filter(p => fs.existsSync(p));
 const blockedNames = /(^|\/)(\.env($|\.)|id_rsa$|id_ed25519$|.*\.(pem|key)$|credentials\.json$)/i;
