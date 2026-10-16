@@ -265,3 +265,10 @@
 - 사전 로컬 검증: Node 회귀 테스트 `39/39` 통과; Bash 구문 검사, JavaScript 구문 검사, 세 YAML 파일 파싱, `git diff --check` 통과. 격리 Compose 정적 렌더링에는 6개 서비스, 게시된 호스트 포트 0개, internal 네트워크 3개 및 각 서비스의 영구 볼륨 설정이 확인됐다. root 소유 정리 fixture는 현재 실행기에 passwordless sudo가 없어 컨테이너 기반 root 소유 파일과 임시 sudo shim으로 실제 경로를 재현했다. GitHub-hosted `ubuntu-latest`에서는 workflow의 별도 fixture가 passwordless sudo를 직접 확인한 뒤 수행한다.
 - 이번 수정 전후의 전체 GitHub Actions 통합 실행은 아직 하지 않았다. 단일 실행은 커밋·푸시 후 이 워크플로가 자동 시작되면 한 번만 확인한다. 이전 기능 성공 기록은 직전 실행 `38824053103`의 해당 통과 단계에만 적용하며, 새 통합 run 결과로 간주하지 않는다. 실제 SNS 연결/게시, 서버 배포, 운영 데이터 변경은 하지 않았다. 이번 결과의 운영 서버 구매 판정도 **NO-GO**다.
 - 다음: 사전 검사 후 `work`에 이 변경과 기록을 체크포인트 커밋·푸시하고, 원격 SHA 일치를 확인한 뒤 자동 통합 실행 하나의 실제 결과를 기록한다.
+
+### 원격 체크포인트 및 통합 실행 조회 상태
+
+- 코드·워크플로 변경은 `761d42c8c83bcf673cb0bbe767db7b9999b18b42`로 `work`에 push했다. 이후 이 기록만 별도 커밋으로 추가한다.
+- push가 workflow의 `work` 브랜치 및 변경 경로 조건을 만족하므로 자동 통합 실행이 예상되지만, 이 실행 환경에서 GitHub Actions run ID/상태/로그는 확인하지 못했다. `gh auth status`는 현재 인증 토큰이 유효하지 않다고 보고했고, GitHub API 조회는 네트워크 프록시에서 HTTP CONNECT 403으로 차단됐다. 따라서 Actions 통합 결과는 **UNVERIFIED**이며, 성공으로 판정하지 않는다. 최대 1회 제한을 지키기 위해 수동 재실행하지 않는다.
+- 확인 위치: https://github.com/goldeget/putduk-social-auto/actions/workflows/putduk-docker-build-check.yml?query=branch%3Awork . 실행이 실제로 완료됐는지는 해당 Actions 기록에서 확인해야 한다.
+- GitHub 원격 `work` SHA는 코드 체크포인트 push 직후 `761d42c8c83bcf673cb0bbe767db7b9999b18b42`와 일치했다. 이 기록 추가 후 최종 원격 SHA는 완료 보고서와 재조회 결과에 기재한다. 새 전체 통합 실행 결과가 확인되기 전 운영 구매 판정은 **NO-GO**다.
