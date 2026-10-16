@@ -71,6 +71,8 @@ test('Docker image installs only the exact lockfile dependency graph', () => {
   assert.match(nginx, /^\s*access_log\s+\/dev\/stdout;$/m);
   assert.match(nginx, /^\s*error_log\s+\/dev\/stderr warn;$/m);
   assert.match(dockerfile, /\/app\/apps\/frontend\/\.next\/cache/);
+  assert.match(dockerfile, /\/app\/node_modules\/\.prisma/);
+  assert.match(integrationScript, /docker run --rm --network none --user "\$\(id -u\):\$\(id -g\)" -v "\$upload_volume:\/source:ro"/);
   assert.match(
     rootPackage.scripts['prisma-generate'],
     /^pnpm exec prisma generate /

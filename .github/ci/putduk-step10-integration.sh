@@ -796,7 +796,7 @@ echo 'Backing up and restoring the uploaded test image volume.'
 postiz_container="$(dc ps -q postiz)"
 upload_volume="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/uploads"}}{{.Name}}{{end}}{{end}}' "$postiz_container")"
 [[ "$upload_volume" == "${PROJECT}_postiz-uploads" ]] || { echo 'Upload volume is outside this test project.' >&2; exit 1; }
-docker run --rm --network none -v "$upload_volume:/source:ro" -v "$WORKDIR/upload-snapshot:/backup" \
+docker run --rm --network none --user "$(id -u):$(id -g)" -v "$upload_volume:/source:ro" -v "$WORKDIR/upload-snapshot:/backup" \
   "$IMAGE_TAG" node -e 'require("node:fs").cpSync("/source/.", "/backup", {recursive:true})'
 source_hash="$(sha256sum "$WORKDIR/upload-snapshot/$UPLOAD_RELATIVE_PATH" | awk '{print $1}')"
 upload_restore_volume="${PROJECT}-upload-restore"

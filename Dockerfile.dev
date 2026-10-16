@@ -25,7 +25,8 @@ COPY var/docker/nginx.conf /etc/nginx/nginx.conf
 
 RUN pnpm install --frozen-lockfile
 RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm run build
-RUN mkdir -p /app/apps/frontend/.next/cache && chown -R www:www /app/apps/frontend/.next/cache
+RUN mkdir -p /app/apps/frontend/.next/cache \
+ && chown -R www:www /app/apps/frontend/.next/cache /app/node_modules/.prisma
 
 ENV HOME=/www PM2_HOME=/www/.pm2
 USER www:www
