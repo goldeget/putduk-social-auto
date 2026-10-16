@@ -26,7 +26,7 @@ RUN pnpm exec prisma generate --schema ./libraries/nestjs-libraries/src/database
  && cp -a /tmp/putduk-prisma-client/. /app/node_modules/.prisma/ \
  && rm -rf /tmp/putduk-prisma-client \
  && find /app/node_modules -type f -name '.env' -delete \
- && find /app/node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name __fixtures__ -o -name fixtures -o -name docs -o -name certificate \) -prune -exec rm -rf '{}' + \
+ && find /app/node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name __fixtures__ -o -name fixtures -o -name certificate \) -prune -exec rm -rf '{}' + \
  && find /app/node_modules -type f \( -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' -o -name '*.map' -o -name '*.md' \) -exec rm -f '{}' + \
  && find /app -path /app/node_modules -prune -o -type f -name '*.spec.ts' -exec rm -f '{}' + \
  && rm -rf /app/scripts /app/reports /app/docs /app/.claude /app/var/docker \
@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash nginx \
 
 RUN npm --no-update-notifier --no-fund --global install pnpm@10.6.1 pm2@7.0.4 prisma@6.5.0
 RUN find /usr/local/lib/node_modules -type f -name '.env' -delete \
- && find /usr/local/lib/node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name __fixtures__ -o -name fixtures -o -name docs -o -name certificate \) -prune -exec rm -rf '{}' + \
+ && find /usr/local/lib/node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name __fixtures__ -o -name fixtures -o -name certificate \) -prune -exec rm -rf '{}' + \
  && find /usr/local/lib/node_modules -type f \( -name '*.test.js' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.spec.ts' -o -name '*.map' -o -name '*.md' \) -exec rm -f '{}' +
 
 WORKDIR /app
