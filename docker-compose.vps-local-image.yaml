@@ -1,0 +1,8 @@
+# Overlay for an image built locally from an exact verified source SHA.
+# No registry fallback: Compose fails if the local image is missing.
+services:
+  postiz:
+    image: ${PUTDUK_LOCAL_IMAGE:?Set PUTDUK_LOCAL_IMAGE to putduk-social-auto:<full-source-SHA>}
+    pull_policy: never
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}

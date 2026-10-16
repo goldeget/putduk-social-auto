@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
+[[ $# -ge 1 && $# -le 2 ]] || fail "사용법: verify-image.sh <40자리-source-SHA> [image-tag]"
+sha="$1"
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "SHA는 소문자 40자리여야 합니다."
+image="${2:-putduk-social-auto:$sha}"
+[[ "$image" == "putduk-social-auto:$sha" ]] || fail "이미지 태그는 putduk-social-auto:<동일한 SHA>여야 합니다."
+docker image inspect "$image" >/dev/null 2>&1 || fail "이미지가 로컬에 없습니다: $image"
+
+readarray -t fields < <(docker image inspect --format '{{.Id}}{{"\n"}}{{.Os}}{{"\n"}}{{.Architecture}}{{"\n"}}{{index .Config.Labels "org.opencontainers.image.revision"}}{{"\n"}}{{index .Config.Labels "org.opencontainers.image.source"}}' "$image")
+image_id="${fields[0]:-}"
+os="${fields[1]:-}"
+arch="${fields[2]:-}"
+revision="${fields[3]:-}"
+source="${fields[4]:-}"
+[[ "$os/$arch" == linux/amd64 ]] || fail "이미지 플랫폼이 linux/amd64가 아닙니다: $os/$arch"
+[[ "$revision" == "$sha" ]] || fail "OCI revision이 입력 SHA와 다릅니다."
+[[ "$source" == https://github.com/goldeget/putduk-social-auto ]] || fail "OCI source가 예상 저장소와 다릅니다."
+[[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Docker image ID를 확인할 수 없습니다."
+
+# Inspect only; do not start the application or attach a network.
+docker run --rm --network none --entrypoint node "$image" -e '
+const fs = require("node:fs"), path = require("node:path");
+const roots = ["/app", "/opt", "/usr/src/app"].filter(p => fs.existsSync(p));
+const blockedNames = /(^|\/)(\.env($|\.)|id_rsa$|id_ed25519$|.*\.(pem|key)$|credentials\.json$)/i;
+const secretPatterns = [/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/, /AKIA[0-9A-Z]{16}/, /gh[pousr]_[A-Za-z0-9]{30,}/];
+let bad = [];
+function walk(p, depth) {
+  if (depth > 14) return;
+  let entries; try { entries = fs.readdirSync(p, {withFileTypes:true}); } catch { return; }
+  for (const e of entries) {
+    const q = path.join(p, e.name);
+    if (blockedNames.test(q)) { bad.push(q); continue; }
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) walk(q, depth + 1);
+    else if (e.isFile()) {
+      let st; try { st = fs.statSync(q); } catch { continue; }
+      if (st.size > 2*1024*1024) continue;
+      let b; try { b = fs.readFileSync(q); } catch { continue; }
+      if (b.includes(0)) continue;
+      const s = b.toString("utf8");
+      if (secretPatterns.some(r => r.test(s))) bad.push(q);
+    }
+  }
+}
+roots.forEach(p => walk(p, 0));
+if (bad.length) { console.error("Potential secret material found in image paths:", [...new Set(bad)].join(", ")); process.exit(1); }
+console.log("Image filesystem secret scan passed (heuristic; not a proof of absence).");
+'
+printf 'IMAGE_ID=%s\nSOURCE_SHA=%s\nIMAGE=%s\n' "$image_id" "$sha" "$image"
