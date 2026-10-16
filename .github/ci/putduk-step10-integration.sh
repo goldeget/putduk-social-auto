@@ -801,8 +801,8 @@ docker run --rm --network none --user "$(id -u):$(id -g)" -v "$upload_volume:/so
 source_hash="$(sha256sum "$WORKDIR/upload-snapshot/$UPLOAD_RELATIVE_PATH" | awk '{print $1}')"
 upload_restore_volume="${PROJECT}-upload-restore"
 docker volume create --label "putduk.step10.project=$PROJECT" "$upload_restore_volume" >/dev/null
-docker run --rm --network none -v "$WORKDIR/upload-snapshot:/backup:ro" -v "$upload_restore_volume:/target" \
-  "$IMAGE_TAG" node -e 'require("node:fs").cpSync("/backup/.", "/target", {recursive:true})'
+docker run --rm --network none -v "$WORKDIR/upload-snapshot:/backup:ro" -v "$upload_restore_volume:/uploads" \
+  "$IMAGE_TAG" node -e 'require("node:fs").cpSync("/backup/.", "/uploads", {recursive:true})'
 restored_hash="$(docker run --rm --network none -v "$upload_restore_volume:/uploads:ro" \
   "$IMAGE_TAG" node -e 'const f=require("node:fs"),c=require("node:crypto");process.stdout.write(c.createHash("sha256").update(f.readFileSync("/uploads/"+process.argv[1])).digest("hex"))' "$UPLOAD_RELATIVE_PATH")"
 [[ "$source_hash" == "$restored_hash" ]]
