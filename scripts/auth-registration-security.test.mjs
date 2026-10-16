@@ -65,6 +65,7 @@ test('Step 10 verifies concurrent first registration and the production registra
   assert.match(integrationScript, /Existing general-user Local login/);
   assert.match(productionCompose, /profiles: \[admin-bootstrap\]/);
   assert.match(productionCompose, /create-initial-admin\.js/);
+  assert.match(productionCompose, /- --skip-generate/);
   assert.match(productionCompose, /networks:\s+- app-data/);
 });
 

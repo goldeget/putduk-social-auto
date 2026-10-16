@@ -115,6 +115,7 @@ services:
     command:
       - db
       - push
+      - --skip-generate
       - --schema
       - /app/libraries/nestjs-libraries/src/database/prisma/schema.prisma
     restart: "no"
