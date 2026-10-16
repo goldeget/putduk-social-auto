@@ -1,6 +1,18 @@
 import { Provider, User } from '@prisma/client';
 import { LoginUserDto } from '@gitroom/nestjs-libraries/dtos/auth/login.user.dto';
 import { AuthService as AuthChecker } from '@gitroom/helpers/auth/auth.service';
+
+jest.mock('@gitroom/nestjs-libraries/database/prisma/users/users.service', () => ({
+  UsersService: class UsersService {},
+}));
+jest.mock(
+  '@gitroom/nestjs-libraries/database/prisma/organizations/organization.service',
+  () => ({ OrganizationService: class OrganizationService {} })
+);
+jest.mock('@gitroom/backend/services/auth/providers/providers.manager', () => ({
+  AuthProviderManager: class AuthProviderManager {},
+}));
+
 import { AuthService } from './auth.service';
 
 describe('AuthService registration security', () => {
