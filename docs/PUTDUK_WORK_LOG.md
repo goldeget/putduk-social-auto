@@ -309,3 +309,10 @@
 - 실행한 사전 확인: cloud activation 후 Prisma `6.5.0`과 schema `validate` 통과, 신규 및 PM2 회귀 검사 5/5 통과, `bash -n` 통과, `docker compose --env-file .env.production.example -f docker-compose.production.yaml config --quiet` 통과. 전체 Build/Test 명령, frozen lockfile offline 검증, 실제 Docker 재빌드/통합 시작, GitHub Actions 실행 상태는 아직 미실행 또는 미확인이다. 운영 데이터·SNS·서버는 사용하지 않았다.
 - 남은 보안 위험: Dockerfile이 아직 root 사용자로 앱을 실행하고, global PM2 버전 및 base image digest가 고정되지 않았다. 패키지 가시성·권한·비용/한도, GHCR publish, 이미지 pull, VPS 운영, HTTPS, 실제 OAuth/게시, 외부 백업은 미검증이다. 이번 결과의 실제 GHCR push 여부는 **NO**, 서버 운영 판정은 **NO-GO**다.
 - 다음: 전체 정적 회귀와 비밀정보/Compose 검사를 마치고 이 변경을 work에 체크포인트로 커밋·푸시한다. 변경 경로가 기존 Step 10 workflow를 발동하면 그 실행은 자동 실행 1회로 보고 실제 조회가 가능할 때만 결과를 기록한다. 게시 workflow는 별도 승인 전까지 만들지 않는다.
+
+### 체크포인트 및 원격 실행 조회
+
+- 코드·설정·테스트·공급 설계 문서는 `62ed3585f9b2227a7956950c809b7140478efc90`으로 `work`에 push했고, 직후 `git ls-remote origin refs/heads/work`의 SHA가 로컬 HEAD와 동일함을 확인했다. push 이후 작업 트리는 깨끗하다.
+- push 경로는 기존 Step 10 build/integration workflow의 감시 파일(Dockerfile, package, CI compose/script 및 회귀 테스트)과 일치하므로 GitHub 자동 실행이 예상된다. 그러나 이 실행에서 `https://api.github.com/repos/goldeget/putduk-social-auto/actions/workflows/putduk-docker-build-check.yml/runs?branch=work` 조회는 HTTP `CONNECT 403`으로 차단됐다. 따라서 자동 Actions 실행 ID/상태/결과는 **UNVERIFIED**이며 수동 재실행은 하지 않았다. 일반 push에 반응하는 기존 `Build` workflow도 자동 실행 가능하지만 그 결과 역시 확인 불가다.
+- 로컬 회귀 43/43, frozen lockfile metadata check, Prisma 6.5.0/schema validate, Compose 정적 설정, Bash/YAML 구문, Prettier 대상 검사 및 `git diff --check` 통과. Docker 이미지 재빌드·전체 격리 통합은 수행하지 않았으므로 production 시작 흐름의 실제 컨테이너 실행은 Actions 확인 전까지 미검증이다.
+- 이미지 공급 자체는 변경 후에도 준비 게이트가 남아 실제 GHCR push **NO**. 서버 운영 판정 **NO-GO**. 코드 체크포인트 `62ed3585f9b2227a7956950c809b7140478efc90`이 현재 검증된 복구 기준이다.
