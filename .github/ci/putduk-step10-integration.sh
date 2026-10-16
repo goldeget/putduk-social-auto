@@ -473,52 +473,44 @@ printf '::add-mask::%s\n' "$TEST_PASSWORD"
 printf '%s\n' "$TEST_PASSWORD" >> "$REDACTIONS_FILE"
 export TEST_EMAIL TEST_PASSWORD RACE_EMAIL
 
-bootstrap_admin() {
-  local email="$1" company="$2"
-  PUTDUK_BOOTSTRAP_EMAIL="$email" PUTDUK_BOOTSTRAP_COMPANY="$company" \
-    dc_admin run --rm -T --no-deps --entrypoint node \
-      -e PUTDUK_BOOTSTRAP_EMAIL -e PUTDUK_BOOTSTRAP_COMPANY -e TEST_PASSWORD \
-      admin-bootstrap -e '
-        const { PrismaClient } = require("@prisma/client");
-        const { createInitialAdmin } = require("./dist/apps/backend/src/services/auth/create-initial-admin.js");
-        const prisma = new PrismaClient();
-        createInitialAdmin(prisma, {
-          company: process.env.PUTDUK_BOOTSTRAP_COMPANY,
-          email: process.env.PUTDUK_BOOTSTRAP_EMAIL,
-          password: process.env.TEST_PASSWORD,
-        }).then(() => process.stdout.write("created\n"))
-          .catch((error) => {
-            const name = /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error?.name || "") ? error.name : "Error";
-            const code = /^[A-Z][A-Z0-9_]{0,39}$/.test(error?.code || "") ? error.code : "none";
-            process.stderr.write(`BOOTSTRAP_DIAG name=${name} code=${code}\n`);
-            process.exitCode = 1;
-          })
-          .finally(() => prisma.$disconnect());
-      '
-}
-
 set +e
-bootstrap_admin "$TEST_EMAIL" 'PUTDUK Step 10 Test' >"$WORKDIR/bootstrap-one.log" 2>&1 &
-bootstrap_one_pid=$!
-bootstrap_admin "$RACE_EMAIL" 'PUTDUK Step 10 Race' >"$WORKDIR/bootstrap-two.log" 2>&1 &
-bootstrap_two_pid=$!
-wait "$bootstrap_one_pid"
-bootstrap_one_status=$?
-wait "$bootstrap_two_pid"
-bootstrap_two_status=$?
+bootstrap_result="$(PUTDUK_BOOTSTRAP_EMAIL="$TEST_EMAIL" \
+  PUTDUK_BOOTSTRAP_COMPANY='PUTDUK Step 10 Test' dc_admin run --rm -T --no-deps \
+  --entrypoint node -e PUTDUK_BOOTSTRAP_EMAIL -e PUTDUK_BOOTSTRAP_COMPANY \
+  -e RACE_EMAIL -e TEST_EMAIL -e TEST_PASSWORD admin-bootstrap -e '
+    const { PrismaClient } = require("@prisma/client");
+    const { createInitialAdmin } = require("./dist/apps/backend/src/services/auth/create-initial-admin.js");
+    const emails = [process.env.TEST_EMAIL, process.env.RACE_EMAIL];
+    const clients = [new PrismaClient(), new PrismaClient()];
+    const attempts = emails.map((email, index) => createInitialAdmin(clients[index], {
+      company: `PUTDUK Step 10 ${index === 0 ? "Test" : "Race"}`,
+      email,
+      password: process.env.TEST_PASSWORD,
+    }));
+    Promise.allSettled(attempts).then((results) => {
+      const winners = results.flatMap((result, index) => result.status === "fulfilled" ? [emails[index]] : []);
+      const failures = results.filter((result) => result.status === "rejected").map(({ reason }) => {
+        const name = /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(reason?.name || "") ? reason.name : "Error";
+        const code = /^[A-Z][A-Z0-9_]{0,39}$/.test(reason?.code || "") ? reason.code : "none";
+        return `${name}:${code}`;
+      });
+      process.stdout.write(`BOOTSTRAP_RESULT successes=${winners.length} errors=${failures.join(",") || "none"}\n`);
+      if (winners.length !== 1) process.exitCode = 1;
+      else process.stdout.write(`BOOTSTRAP_EMAIL=${winners[0]}\n`);
+    }).catch(() => {
+      process.stderr.write("BOOTSTRAP_DIAG unexpected=internal\n");
+      process.exitCode = 1;
+    }).finally(() => Promise.all(clients.map((client) => client.$disconnect())));
+  ' 2>&1)"
+bootstrap_status=$?
 set -e
-if ! { [[ "$bootstrap_one_status" == 0 && "$bootstrap_two_status" != 0 ]] || \
-       [[ "$bootstrap_one_status" != 0 && "$bootstrap_two_status" == 0 ]]; }; then
-  grep -hE '^BOOTSTRAP_DIAG name=[A-Za-z0-9]+ code=[A-Z0-9_]+$' \
-    "$WORKDIR/bootstrap-one.log" "$WORKDIR/bootstrap-two.log" 2>/dev/null || true
+printf '%s\n' "$bootstrap_result" | grep -E '^BOOTSTRAP_(RESULT|EMAIL|DIAG)' || true
+if [[ "$bootstrap_status" != 0 ]]; then
   echo 'Concurrent first-admin bootstrap did not produce exactly one successful request.' >&2
   exit 1
 fi
-if [[ "$bootstrap_one_status" == 0 ]]; then
-  TEST_EMAIL="putduk-step10-${GITHUB_RUN_ID}@example.invalid"
-else
-  TEST_EMAIL="$RACE_EMAIL"
-fi
+TEST_EMAIL="$(printf '%s\n' "$bootstrap_result" | sed -n 's/^BOOTSTRAP_EMAIL=//p' | tail -n 1)"
+[[ -n "$TEST_EMAIL" ]] || { echo 'Concurrent first-admin bootstrap result was missing.' >&2; exit 1; }
 export TEST_EMAIL
 echo 'Concurrent first-admin bootstrap check: exactly one request succeeded.'
 
