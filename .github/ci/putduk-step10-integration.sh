@@ -329,14 +329,26 @@ STATS_PID=$!
 
 echo 'Starting isolated services. Caddy is disabled and the app is bound to loopback only.'
 dc up -d --wait --wait-timeout 900 \
-  postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal postiz
-for service in postiz postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal; do
+  postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal
+for service in postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal; do
   container="$(dc ps -q "$service")"
   [[ -n "$container" ]]
   health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
   [[ "$health" == healthy ]] || { echo "$service health check: $health" >&2; exit 1; }
 done
 [[ -z "$(dc ps -q caddy)" ]]
+
+mark_phase 'apply the pinned Prisma schema once before application startup'
+dc run --rm --no-deps postiz pnpm run prisma-db-push
+
+mark_phase 'start Postiz using the production image default command'
+dc up -d --wait --wait-timeout 900 postiz
+for service in postiz postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal; do
+  container="$(dc ps -q "$service")"
+  [[ -n "$container" ]]
+  health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+  [[ "$health" == healthy ]] || { echo "$service health check: $health" >&2; exit 1; }
+done
 
 dc exec -T postiz pm2 jlist | python3 -c '
 import json, sys

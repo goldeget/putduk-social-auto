@@ -19,7 +19,7 @@
 ## 서버 구매 전 차단 항목
 
 1. **배포 이미지 경로와 소스 일치:** Step 10은 `Dockerfile.dev`에서 `GITHUB_SHA`를 OCI revision으로 표시한 amd64 이미지를 GitHub Actions 실행기 로컬에서만 만들었다. 레지스트리에 올리지 않았으므로 영구 pull 가능한 digest가 없다. 반면 `.env.production.example`은 `ghcr.io/gitroomhq/postiz-app@sha256:REPLACE_WITH_TESTED_64_HEX_DIGEST`를 적고 있어 upstream Postiz 이미지와 잘못된 예시 digest를 가리킨다. `POSTIZ_IMAGE`에는 `work`의 정확한 검증 커밋에서 만든 퍼뜩 이미지의 실제 immutable digest가 필요하다. 공개 GHCR 게시나 계정·레지스트리 생성은 승인 없이 하지 않는다.
-2. **실행 명령과 DB 스키마 변경:** `Dockerfile.dev`의 기본 CMD는 `pnpm run pm2`이고, 루트 `pm2-run`은 시작 때 `pnpm run prisma-db-push`를 실행한다. 이 스크립트는 `pnpm dlx prisma@6.5.0 db push`로 패키지를 네트워크에서 가져오며 DB 스키마를 자동 변경할 수 있다. Step 10 overlay는 인터넷 차단을 유지하려고 `pnpm exec prisma db push`로 명령을 덮어썼다. 따라서 성공한 CI 검증은 production의 정확한 시작 경로와 외부 패키지 다운로드 동작을 검증하지 않았다. 재시작마다 자동 스키마 변경을 할지, 버전 고정된 로컬 CLI와 별도 승인 마이그레이션 절차를 쓸지 결정하고 격리 복구를 시험해야 한다.
+2. **실행 명령과 DB 스키마 변경:** 이번 Step 11-B에서 `pm2-run`의 자동 스키마 변경을 제거하고, 고정된 프로젝트 내 Prisma CLI를 쓰도록 했다. Step 10도 의존 서비스 health 이후 같은 명시적 `prisma-db-push` 일회 작업을 실행한 뒤, 이미지 기본 CMD로 Postiz를 시작하도록 맞췄다. 이제 실제 production image를 pull해 통합 실행한 결과는 아직 없다. 운영 데이터 변경 전에는 별도 백업·승인·검증이 필요하다.
 3. **12GB 자원 상한:** Step 10 overlay의 컨테이너 제한은 합계 약 8.75 GiB / 5 vCPU다(앱 4 GiB/2 CPU, Temporal 2 GiB/1 CPU, Elasticsearch 1.5 GiB/0.75 CPU, 나머지 DB와 Redis). 이는 CI의 제한값이지 사용량 측정치가 아니다. 운영 Compose에는 Elasticsearch 2 GiB 제한만 있고 나머지 서비스의 CPU/RAM 제한은 없다. 서비스가 상한까지 사용하면 Ubuntu, Docker, 파일 캐시와 장애 대응 여유가 보장되지 않는다. 6 vCPU / 12GB는 최초 후보로만 보며, 같은 상한과 실제 운영 workload로 VPS에서 검증 전에는 적합 확정 불가다.
 4. **운영 인증 모드:** 운영 Compose는 `DISABLE_REGISTRATION=true`, `NOT_SECURED=false`지만 Step 10은 테스트 가입 허용과 `NOT_SECURED=true`를 사용했다. 공개 HTTPS에서 secure cookie, 최초 관리자 생성·권한, 가입 차단 및 관리자 외부 접근 통제를 확인해야 한다. 현재 Caddy는 관리자 전체 화면을 공개 도메인에 프록시하며 IP 제한/VPN/별도 접근 게이트가 정의되지 않았다.
 5. **외부 백업과 복원:** Step 10의 덤프 및 볼륨 복원은 같은 일회용 GitHub runner 내부의 격리 자원에서 성공한 테스트다. 운영 서버 외부 저장소, 백업 암호화 키, 일정·보존·삭제 방지, 알림, 장애 시 새 서버 복원은 미구현·미검증이다. Postiz DB에는 OAuth 자격 증명이 포함될 수 있으므로 암호화와 최소 접근 권한이 필요하다.
@@ -127,3 +127,15 @@
 - 임시 Docker build context에 가짜 `.env.production`, `.env.production.example`, 일반 소스 파일을 넣어 실제 BuildKit export로 확인했다. 두 env 파일은 제외되고 정상 소스 파일은 포함됐다. 임시 테스트 자원만 제거했다.
 - `docker compose --env-file .env.production.example -f docker-compose.production.yaml config --quiet` 통과. 구성 렌더링 결과에서 공개 포트·내부 네트워크·named volume 및 운영 서비스 자원을 정적으로 확인했다.
 - Step 10 전체 통합 검사는 반복하지 않았다. HTTPS/TLS, 실제 이미지 pull, 운영 모드 VPS 부하, 실제 SNS OAuth/게시, 외부 저장소 백업·복원은 미검증이다.
+
+## STEP 11-B — 운영 이미지 공급 체계 준비
+
+- GHCR 후보 경로는 `ghcr.io/goldeget/putduk-social-auto`다. 공개 저장소라는 사실만으로 GHCR 패키지가 공개/비공개 어느 쪽인지 판단하지 않는다. 읽기 전용 익명 registry probe의 `401 UNAUTHORIZED`는 패키지 존재·소유권·가시성·게시 권한을 확정하지 않으므로 모두 **UNKNOWN**이다. 실제 패키지 생성, visibility 변경, 로그인, push는 하지 않았다.
+- 공개가 보장되지 않으면 게시를 중단한다. 이후 별도 승인으로 GitHub UI에서 정확한 소유자와 패키지 이름을 확인하고, 비공개 상태가 확인된 기존 패키지/사전 생성 패키지만 대상으로 해야 한다. 수동 `workflow_dispatch` 게시 설계는 [운영 이미지 공급 절차](production-image-supply.md)에 기록했으며 실제 워크플로는 아직 만들거나 실행하지 않았다.
+- 이미지 후보는 `work`의 정확한 SHA에 연결한다. OCI `org.opencontainers.image.revision`은 실제 checkout SHA와 같아야 하고 SHA 태그를 사용한다. Compose는 검증 후 받은 immutable `@sha256:` digest만 사용한다. VPS에서 읽기 전용 package credential로 pull한 뒤 registry manifest digest, 플랫폼, OCI revision을 확인한다. `latest`는 운영 기준으로 사용하지 않는다.
+- 기존 `.env.production.example`의 upstream `gitroomhq/postiz-app` 및 가짜 digest를 퍼뜩용 이미지 후보 placeholder로 바꿨다. 이는 실제 패키지/이미지가 있다는 뜻이 아니며 실제 digest가 나올 때까지 Compose로 운영 기동할 수 없다.
+- 운영/테스트 시작 경로의 차이를 확인했다. 기존 운영 `pm2-run`은 매 컨테이너 재시작 때 `pnpm dlx prisma@6.5.0 db push`를 호출해 외부 패키지 다운로드와 승인 없는 DB 스키마 변경을 수행할 수 있었다. 프로젝트에는 Prisma CLI 6.5.0이 고정 dependency로 포함돼 있다. `prisma-generate`, `prisma-db-push`, `prisma-db-pull`을 `pnpm exec prisma`로 전환하고, PM2 애플리케이션 재시작에서 schema push를 제거했다. Step 10은 격리 DB가 healthy가 된 후 일회성 `dc run --rm --no-deps postiz pnpm run prisma-db-push`로 스키마를 적용하고 기본 이미지 CMD로 앱을 시작한다. 운영 Compose와 PM2 순차 시작 로직은 수정하지 않았다.
+- 재현성 향상을 위해 `Dockerfile.dev` install을 `pnpm install --frozen-lockfile`로 바꿨다. 실제 로컬 frozen lockfile install 및 Docker 이미지 재빌드는 아직 확인하지 않았다. lockfile은 이 변경에서 수정하지 않았다.
+- 회귀검사: 새 `scripts/production-startup.test.mjs`를 변경 전 실행해 3개 실패(RED)를 확인한 후 구현했다. 수정 뒤 신규 검사 및 기존 PM2/네트워크 관련 검사 5/5 통과. Node/Pnpm 환경에서 Prisma `6.5.0` 확인 및 schema `validate` 통과. Bash 구문 검사와 production Compose 정적 config 검사는 통과했다. GitHub Actions Step 10 전체 통합 실행 및 이미지 build/pull은 이 문서 작성 시점에 수행되지 않았다. push가 자동 실행을 만들 수 있으나 실제 run 조회가 안 되면 성공으로 판단하지 않는다.
+- 이미지/런타임 보안 미완료: `.dockerignore`에서 `.env*` 제외 및 예제 확인은 이전 단계에서 했으나 전체 이미지의 비밀정보 scan은 이번에 다시 하지 않았다. Dockerfile은 아직 root 사용자로 앱을 실행하고 global PM2 버전/base image digest도 고정되지 않았다. 권한 변경은 업로드/설정 쓰기와 호환성 테스트 없이 적용하지 않았다.
+- 실제 SNS OAuth·게시, HTTPS/DNS, VPS, 외부 백업, 운영 복원, 비용 결제는 하지 않았다. 전체 운영 판정 **NO-GO**.

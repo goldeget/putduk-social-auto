@@ -29,6 +29,7 @@ on:
       - apps/orchestrator/**
       - libraries/**
       - scripts/pm2-start-order.test.mjs
+      - scripts/production-startup.test.mjs
       - scripts/backend-readiness.mjs
       - scripts/backend-readiness.test.mjs
       - scripts/step10-network-access.test.mjs
@@ -58,7 +59,7 @@ jobs:
           fetch-depth: 1
 
       - name: Verify PM2 startup, backend readiness, and isolated network access
-        run: node --test scripts/pm2-start-order.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs scripts/step10-upload-response.test.mjs scripts/step10-temporal-status.test.mjs scripts/step10-temporal-start-error.test.mjs scripts/step10-temporal-terminate.test.mjs scripts/step10-restart-readiness.test.mjs scripts/step10-restart-flow.test.mjs scripts/step10-es-snapshot-response.test.mjs scripts/step10-cleanup.test.mjs
+        run: node --test scripts/pm2-start-order.test.mjs scripts/production-startup.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs scripts/step10-upload-response.test.mjs scripts/step10-temporal-status.test.mjs scripts/step10-temporal-start-error.test.mjs scripts/step10-temporal-terminate.test.mjs scripts/step10-restart-readiness.test.mjs scripts/step10-restart-flow.test.mjs scripts/step10-es-snapshot-response.test.mjs scripts/step10-cleanup.test.mjs
 
       - name: Test run-scoped cleanup with root-owned files
         shell: bash

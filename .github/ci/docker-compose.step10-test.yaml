@@ -8,20 +8,14 @@ services:
       - step10-disabled
 
   postiz:
-    # Keep the runner egress-isolated. The image already contains Prisma 6.5.0,
-    # so this is equivalent to the production startup script's db-push step
-    # without pnpm dlx downloading a package at container startup.
-    command:
-      - sh
-      - -c
-      - nginx && pnpm exec prisma db push --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma && pnpm run pm2-start-apps && pm2 logs
+    # Use the image's default application startup, matching the production path.
     environment:
       MAIN_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}
       FRONTEND_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}
       NEXT_PUBLIC_BACKEND_URL: ${STEP10_BASE_URL:?Set STEP10_BASE_URL}/api
-      DISABLE_REGISTRATION: "false"
-      NOT_SECURED: "true"
-      EMAIL_PROVIDER: ""
+      DISABLE_REGISTRATION: 'false'
+      NOT_SECURED: 'true'
+      EMAIL_PROVIDER: ''
     volumes:
       - ${STEP10_EMPTY_DOTENV:?Set STEP10_EMPTY_DOTENV}:/app/.env:ro
     mem_limit: 4g
