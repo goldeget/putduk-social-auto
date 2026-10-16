@@ -64,11 +64,12 @@ available_kib="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
 (( available_kib >= min_ram * 1024 * 1024 )) || fail "MemAvailable is below ${min_ram} GiB."
 
 log="$tmp/memory-watch.log"
+build_log="$tmp/docker-build.log"
 docker buildx build --load --platform linux/amd64 \
   --label "org.opencontainers.image.revision=$sha" \
   --label "org.opencontainers.image.source=https://github.com/goldeget/putduk-social-auto" \
   --build-arg "NEXT_PUBLIC_VERSION=$sha" \
-  --tag "$image" --file "$source_tree/Dockerfile.dev" "$source_tree" &
+  --tag "$image" --file "$source_tree/Dockerfile.dev" "$source_tree" >"$build_log" 2>&1 &
 build_pid=$!
 bash "$monitor" "$build_pid" "$((min_abort * 1024 * 1024))" "$log" &
 monitor_pid=$!
@@ -80,7 +81,7 @@ kill "$monitor_pid" 2>/dev/null || true
 wait "$monitor_pid" 2>/dev/null || true
 monitor_pid=""
 if [[ -s "$log" ]]; then cat "$log" >&2; fail "메모리 안전선 도달로 빌드를 취소했습니다. Docker daemon이 작업을 완전히 종료했는지 확인 전 재시도하지 마세요."; fi
-(( build_rc == 0 )) || fail "Docker 빌드가 실패했습니다. 운영 이미지와 서비스는 변경하지 않았습니다."
+(( build_rc == 0 )) || fail "Docker 빌드가 실패했습니다. 빌드 원문 로그는 비밀정보 노출 방지를 위해 표시하지 않았으며 임시 디렉터리 정리 시 삭제됩니다. 운영 이미지와 서비스는 변경하지 않았습니다."
 
 bash "$repo/scripts/vps/verify-image.sh" "$sha" "$image"
 printf '빌드 및 이미지 검사 완료. production 서비스는 전환하지 않았습니다.\n'

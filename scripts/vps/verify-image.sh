@@ -2,14 +2,18 @@
 set -Eeuo pipefail
 
 fail() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 [[ $# -ge 1 && $# -le 2 ]] || fail "사용법: verify-image.sh <40자리-source-SHA> [image-tag]"
 sha="$1"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "SHA는 소문자 40자리여야 합니다."
 image="${2:-putduk-social-auto:$sha}"
 [[ "$image" == "putduk-social-auto:$sha" ]] || fail "이미지 태그는 putduk-social-auto:<동일한 SHA>여야 합니다."
-docker image inspect "$image" >/dev/null 2>&1 || fail "이미지가 로컬에 없습니다: $image"
+"$DOCKER_BIN" image inspect "$image" >/dev/null 2>&1 || fail "이미지가 로컬에 없습니다: $image"
 
-readarray -t fields < <(docker image inspect --format '{{.Id}}{{"\n"}}{{.Os}}{{"\n"}}{{.Architecture}}{{"\n"}}{{index .Config.Labels "org.opencontainers.image.revision"}}{{"\n"}}{{index .Config.Labels "org.opencontainers.image.source"}}' "$image")
+metadata="$("$DOCKER_BIN" image inspect --format '{{json .}}' "$image" 2>/dev/null | "$PYTHON_BIN" "$SCRIPT_DIR/inspect-image-metadata.py" inspect)" || fail "이미지 metadata 검사 실패(Config.Env secret 검사 포함); 값은 출력하지 않았습니다."
+mapfile -t fields < <(printf '%s\n' "$metadata" | tr -d '\r')
 image_id="${fields[0]:-}"
 os="${fields[1]:-}"
 arch="${fields[2]:-}"
@@ -20,8 +24,12 @@ source="${fields[4]:-}"
 [[ "$source" == https://github.com/goldeget/putduk-social-auto ]] || fail "OCI source가 예상 저장소와 다릅니다."
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Docker image ID를 확인할 수 없습니다."
 
+if ! "$DOCKER_BIN" image history --no-trunc --format '{{.CreatedBy}}' "$image" 2>/dev/null | "$PYTHON_BIN" "$SCRIPT_DIR/inspect-image-metadata.py" history >/dev/null; then
+  fail "이미지 빌드 이력에 비밀정보가 있을 수 있습니다. 원문은 출력하지 않았습니다."
+fi
+
 # Inspect only; do not start the application or attach a network.
-docker run --rm --network none --entrypoint node "$image" -e '
+"$DOCKER_BIN" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 256m --user 65534:65534 --entrypoint node "$image" -e '
 const fs = require("node:fs"), path = require("node:path");
 const roots = ["/app", "/opt", "/usr/src/app"].filter(p => fs.existsSync(p));
 const blockedNames = /(^|\/)(\.env($|\.)|id_rsa$|id_ed25519$|.*\.(pem|key)$|credentials\.json$)/i;
