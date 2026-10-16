@@ -487,7 +487,12 @@ bootstrap_admin() {
           email: process.env.PUTDUK_BOOTSTRAP_EMAIL,
           password: process.env.TEST_PASSWORD,
         }).then(() => process.stdout.write("created\n"))
-          .catch(() => { process.exitCode = 1; })
+          .catch((error) => {
+            const name = /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error?.name || "") ? error.name : "Error";
+            const code = /^[A-Z][A-Z0-9_]{0,39}$/.test(error?.code || "") ? error.code : "none";
+            process.stderr.write(`BOOTSTRAP_DIAG name=${name} code=${code}\n`);
+            process.exitCode = 1;
+          })
           .finally(() => prisma.$disconnect());
       '
 }
@@ -504,6 +509,8 @@ bootstrap_two_status=$?
 set -e
 if ! { [[ "$bootstrap_one_status" == 0 && "$bootstrap_two_status" != 0 ]] || \
        [[ "$bootstrap_one_status" != 0 && "$bootstrap_two_status" == 0 ]]; }; then
+  grep -hE '^BOOTSTRAP_DIAG name=[A-Za-z0-9]+ code=[A-Z0-9_]+$' \
+    "$WORKDIR/bootstrap-one.log" "$WORKDIR/bootstrap-two.log" 2>/dev/null || true
   echo 'Concurrent first-admin bootstrap did not produce exactly one successful request.' >&2
   exit 1
 fi
