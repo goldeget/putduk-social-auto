@@ -60,6 +60,7 @@ test('Step 10 verifies concurrent first registration and the production registra
   assert.match(integrationScript, /const clients = \[new PrismaClient\(\), new PrismaClient\(\)\]/);
   assert.match(integrationScript, /Promise\.allSettled\(attempts\)/);
   assert.match(integrationScript, /winners\.length !== 1/);
+  assert.match(integrationScript, /sanitize_log "\$WORKDIR\/bootstrap-result\.log"/);
   assert.match(integrationScript, /exactly one successful request/i);
   assert.match(integrationScript, /\/api\/auth\/can-register/);
   assert.match(integrationScript, /GENERAL_EMAIL/);

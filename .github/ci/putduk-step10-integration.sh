@@ -506,6 +506,8 @@ bootstrap_status=$?
 set -e
 printf '%s\n' "$bootstrap_result" | grep -E '^BOOTSTRAP_(RESULT|EMAIL|DIAG)' || true
 if [[ "$bootstrap_status" != 0 ]]; then
+  printf '%s\n' "$bootstrap_result" > "$WORKDIR/bootstrap-result.log"
+  sanitize_log "$WORKDIR/bootstrap-result.log" >&2
   echo 'Concurrent first-admin bootstrap did not produce exactly one successful request.' >&2
   exit 1
 fi
