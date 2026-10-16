@@ -254,3 +254,14 @@
 - 최대 container RAM/CPU와 디스크 수치는 공개 check annotation에 포함되지 않아 **미확인**이다. 사전 디스크 안전 게이트는 통과했다. 이 실행은 목표 VPS 자원 적합성을 증명하지 않는다.
 - 같은 커밋에서 별도 일반 Build run `38824053077` (`https://github.com/goldeget/putduk-social-auto/actions/runs/38824053077`)의 `pnpm run build`가 성공했다. 따라서 사용자가 앞서 언급한 일반 Build의 `next/font/google` 실패는 이 커밋의 실행에서는 재현되지 않았다. 글꼴 코드나 UI를 변경하지 않았다.
 - 통합 실행 허용 횟수 1회를 모두 사용했으므로 추가 전체 Docker/GitHub Actions 통합 실행은 하지 않는다. 다음 필요한 최소 작업은 Elasticsearch snapshot API의 비밀 없는 HTTP 상태/오류 본문과 cleanup 단계의 상세 종료 원인을 기록하도록 진단만 보강한 뒤, 별도 승인된 테스트 횟수 안에서 격리 검증하는 것이다. Elasticsearch 복원, fatal-log scan, 자원 사용량은 아직 검증되지 않았으며 운영 구매 판정은 **NO-GO**다.
+
+## Elasticsearch 스냅샷 API 및 CI 임시 자원 정리 안정화 — 2026-10-16
+
+- 시작 기준 저장소 `goldeget/putduk-social-auto`, 브랜치 `work`; 로컬·GitHub 원격 SHA `e53ff50ffd2ebf1de6819140fcfbfb8db4a97f5e` 일치, 시작 작업 트리 깨끗함을 확인했다. 활성화 스크립트 후 Node.js `22.20.0`, pnpm `10.6.1`이었다. main 및 다른 저장소는 열거나 변경하지 않았다.
+- 최소 Elasticsearch 7.17.27 probe는 `--network none`, 스냅샷 저장 위치만 고유한 `/tmp` 테스트 폴더에 연결해 실행했다. 이전 URI 형식은 실제 HTTP 400과 `illegal_argument_exception` / `request ... contains unrecognized parameter: [include_global_state]`를 반환했다. 따라서 `include_global_state`를 URL 쿼리에 넣은 것이 원인이었다. JSON 본문 `{"include_global_state":true}`와 `wait_for_completion=true`만 쿼리에 둔 요청은 스냅샷 `SUCCESS`를 반환했고, 별도 Elasticsearch 클러스터에서 복원하여 실패 0건과 테스트 문서 내용을 확인했다. Elasticsearch 버전/운영 Compose는 변경하지 않았다. probe 컨테이너와 호스트 임시 데이터는 정리했고, 확인 후 내려받았던 ES 이미지 태그도 제거했다.
+- 통합 스크립트는 본문에 `include_global_state`를 보내고 HTTP 상태 및 스냅샷 `SUCCESS`를 별도 검증한다. 실패 시 HTTP 상태와 allowlist된 오류 유형만 기록하며 Elasticsearch 오류 본문이나 원문 reason은 출력하지 않는다.
+- 직전 Actions의 cleanup 단계는 임시 폴더 소유권을 확인하지 않았고 `rm -rf` 권한 오류의 정확한 파일 UID/GID를 남기지 않았다. 따라서 그 실행의 실제 UID/GID 원인을 사후에 확정할 수는 없다. 다만 격리 재현에서 root 소유 중첩 디렉터리/파일은 일반 실행 사용자 삭제를 거부했고, 해당 고유 폴더만 실행 사용자에게 소유권을 넘긴 뒤 삭제가 성공했다. Actions cleanup은 정확한 run ID, state metadata, runner-temp 직속 경로, 심볼릭 링크 부재를 검증한 뒤에만 제한된 `chown`/삭제를 수행한다. Compose 프로젝트 레이블 및 명시적 run 레이블로 컨테이너·볼륨·네트워크를 각각 제거·재조회하며, 전역 prune이나 이미지/cache 삭제는 하지 않는다. cleanup은 기존처럼 `if: always()`에서 실행된다.
+- 추가한 회귀 검사에는 스냅샷 상태/HTTP 오류 및 비밀 문구 마스킹, cleanup 경로·레이블 규칙이 포함된다. root 소유 파일 cleanup fixture는 고유 합성 run ID 아래 root 소유 중첩 파일을 만들고 정리하며, 심볼릭 링크 및 불일치 상태 정보일 때 대상 보존을 검사한다.
+- 사전 로컬 검증: Node 회귀 테스트 `39/39` 통과; Bash 구문 검사, JavaScript 구문 검사, 세 YAML 파일 파싱, `git diff --check` 통과. 격리 Compose 정적 렌더링에는 6개 서비스, 게시된 호스트 포트 0개, internal 네트워크 3개 및 각 서비스의 영구 볼륨 설정이 확인됐다. root 소유 정리 fixture는 현재 실행기에 passwordless sudo가 없어 컨테이너 기반 root 소유 파일과 임시 sudo shim으로 실제 경로를 재현했다. GitHub-hosted `ubuntu-latest`에서는 workflow의 별도 fixture가 passwordless sudo를 직접 확인한 뒤 수행한다.
+- 이번 수정 전후의 전체 GitHub Actions 통합 실행은 아직 하지 않았다. 단일 실행은 커밋·푸시 후 이 워크플로가 자동 시작되면 한 번만 확인한다. 이전 기능 성공 기록은 직전 실행 `38824053103`의 해당 통과 단계에만 적용하며, 새 통합 run 결과로 간주하지 않는다. 실제 SNS 연결/게시, 서버 배포, 운영 데이터 변경은 하지 않았다. 이번 결과의 운영 서버 구매 판정도 **NO-GO**다.
+- 다음: 사전 검사 후 `work`에 이 변경과 기록을 체크포인트 커밋·푸시하고, 원격 SHA 일치를 확인한 뒤 자동 통합 실행 하나의 실제 결과를 기록한다.

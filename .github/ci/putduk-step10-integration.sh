@@ -805,10 +805,18 @@ python3 - "$repo_response" <<'PY'
 import json, sys
 if json.loads(sys.argv[1]).get('acknowledged') is not True: raise SystemExit('ES repository registration failed.')
 PY
-snapshot_response="$(dc exec -T temporal-elasticsearch curl -fsS -X PUT \
-  'http://127.0.0.1:9200/_snapshot/putduk_step10/step10_snapshot?wait_for_completion=true&include_global_state=true')"
-snapshot_state="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("snapshot",{}).get("state",""))' "$snapshot_response")"
-[[ "$snapshot_state" == SUCCESS ]] || { echo 'Elasticsearch snapshot failed.' >&2; exit 1; }
+snapshot_exchange="$(dc exec -T temporal-elasticsearch curl -sS -w $'\nPUTDUK_HTTP_STATUS=%{http_code}' \
+  -X PUT -H 'Content-Type: application/json' -d '{"include_global_state":true}' \
+  'http://127.0.0.1:9200/_snapshot/putduk_step10/step10_snapshot?wait_for_completion=true')" || {
+  echo 'Elasticsearch snapshot request failed before receiving an HTTP response.' >&2
+  exit 1
+}
+snapshot_http_status="${snapshot_exchange##*$'\nPUTDUK_HTTP_STATUS='}"
+snapshot_response="${snapshot_exchange%$'\nPUTDUK_HTTP_STATUS='*}"
+[[ "$snapshot_http_status" =~ ^[0-9]{3}$ ]] || { echo 'Elasticsearch snapshot response did not include a valid HTTP status.' >&2; exit 1; }
+snapshot_response_file="$WORKDIR/elasticsearch-snapshot-response.json"
+printf '%s' "$snapshot_response" > "$snapshot_response_file"
+node scripts/step10-es-snapshot-response.mjs "$snapshot_http_status" "$snapshot_response_file"
 
 echo 'Terminating the far-future test workflow before stopping its worker services.'
 dc exec -T temporal temporal workflow terminate --workflow-id "$WORKFLOW_ID" --reason 'PUTDUK Step 10 CI cleanup' >/dev/null
