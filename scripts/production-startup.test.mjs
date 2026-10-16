@@ -78,6 +78,8 @@ test('production Docker image installs the exact lockfile and prunes development
   assert.match(dockerfile, /pnpm exec jest --runInBand --runTestsByPath apps\/backend\/src\/services\/auth\/auth\.registration-security\.spec\.ts/);
   assert.match(dockerfile, /find \/app\/node_modules -type f -name '\.env' -delete/);
   assert.match(dockerfile, /-name test -o -name tests -o -name __tests__/);
+  assert.match(dockerfile, /-name fixtures -o -name docs -o -name certificate/);
+  assert.match(dockerfile, /-name '\*\.test\.js'.*-name '\*\.md'/s);
   assert.match(dockerfile, /-name '\*\.spec\.ts' -exec rm -f/);
   assert.match(dockerfile, /rm -rf \/app\/scripts \/app\/reports/);
   assert.match(dockerfile, /^FROM node:22\.20-bookworm-slim@sha256:[a-f0-9]{64}(?: AS (?:build|runtime))?$/m);
