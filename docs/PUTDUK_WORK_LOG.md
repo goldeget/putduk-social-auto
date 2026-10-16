@@ -283,3 +283,14 @@
 - 변경 후 자동 실행될 무료 GitHub Actions 통합 테스트가 이번 단계의 유일한 전체 실행이다. 실행 결과는 실제로 조회·확인될 때까지 미검증으로 처리한다. Actions가 확인되지 않으면 수동 재실행하지 않는다. 운영 서버 구매 판정은 **NO-GO**다.
 - 코드·테스트 체크포인트 커밋 `3932db505d036291f225c0141dd123d60c1fb130`을 `work`에 push했고, 직후 `git ls-remote`에서 원격 SHA가 로컬과 일치함을 확인했다. 이 변경으로 workflow가 자동 시작되는 조건이다.
 - Actions 실행 조회는 이 환경의 GitHub API 프록시 `CONNECT 403` 차단과 유효하지 않은 `GH_TOKEN` 때문에 확인하지 못했다. 따라서 통합 실행 ID·결과는 **미검증**이며, 수동 재실행하지 않는다. 확인 위치는 https://github.com/goldeget/putduk-social-auto/actions/workflows/putduk-docker-build-check.yml?query=branch%3Awork 이다.
+
+## STEP 11 운영 배포 사전 점검 — 2026-10-16
+
+- 시작 시 `goldeget/putduk-social-auto`, `work`, 로컬·원격 SHA `c3a55c321d8e8ee5180df4a62fc99755f304d073`가 일치했고 작업 트리는 깨끗했다. Node `22.20.0` 및 pnpm `10.6.1` 활성화 확인. 기존 `main`과 다른 저장소는 변경하지 않았다.
+- 사용자가 확인한 Step 10 Actions `38871945385` 전체 성공(6개 서비스, PM2 세 앱, 로그인, 초안, 이미지, 예약/Temporal, 재시작, PostgreSQL/Redis/Elasticsearch/업로드 복원, 임시 자원 정리)을 기준선으로 기록했다. 이번에는 전체 Docker 통합을 재실행하지 않았다.
+- 운영 Compose와 Step 10 overlay를 비교했다. 실제 운영 HTTPS/Caddy는 Step 10에서 비활성, 테스트 가입 및 `NOT_SECURED=true`는 운영의 `DISABLE_REGISTRATION=true`/`NOT_SECURED=false`와 다르다. Step 10 앱 명령은 이미지 내 Prisma CLI를 사용하지만 Dockerfile 기본 시작은 `pnpm dlx prisma@6.5.0 db push`를 실행해 네트워크 다운로드와 자동 DB schema 변경 위험이 남는다. DB/Redis/Temporal/ES 호스트 포트는 운영 Compose에서 공개되지 않고 internal network를 사용한다.
+- Step 10 이미지는 Actions 실행기 로컬에서만 만들어졌고 운영 Compose의 `POSTIZ_IMAGE` 예제는 공식 `gitroomhq/postiz-app` 이름과 치환용 가짜 digest를 가리킨다. 따라서 퍼뜩 소스와 일치하는 운영 이미지 digest/공급 경로는 미확보. 운영 Compose의 메모리 상한은 Elasticsearch만 2GiB이며 Step 10의 합산 8.75GiB/5 vCPU는 테스트 상한이지 실제 사용량이 아니다.
+- `OPENAI_API_KEY`는 코드의 일부 AI 경로에 쓰이지만 production example 및 Compose 환경에 선언되지 않아 현재 운영 구성에는 전달되지 않는다. Facebook/Instagram, Threads, YouTube와 TikTok의 코드상 환경변수 및 콜백 경로를 기록했으나 앱 심사·권한·HTTPS 콜백 등록·실제 계정 연결은 전부 미검증이다.
+- 확인한 명확한 비밀정보 위험: `.gitignore`에는 실제 `.env.production` ignore가 있으나 `.dockerignore`에는 없었다. `Dockerfile.dev`의 `COPY . /app`에 따라 로컬 루트의 실 env가 이미지 컨텍스트에 포함될 수 있어 `.dockerignore`에 `.env*`를 추가했다. 임시 BuildKit context로 실제 `.env.production`과 `.env.production.example` 둘 다 제외되고 일반 소스는 포함되는 것을 검증했다.
+- `docs/step11-pre-deployment-readiness.md`에 운영 점검표, 배포 전 차단 항목, 자원 및 비용 한계, HTTPS/방화벽, 백업·복원, AI 변수, SNS 콜백, 구매 전/후 절차를 작성했다. 예시 compose 정적 config 검사는 통과했다. VPS, DNS, HTTPS, 외부 백업, 운영 모드 부하, 실제 OAuth/게시, 이미지 pull은 실행하지 않았으며 서버 구매 판정은 **NO-GO**다.
+- 변경 파일: `.dockerignore`, `docs/step11-pre-deployment-readiness.md`, `docs/PUTDUK_WORK_LOG.md`. Step 10 app/Compose/workflow 및 `main`은 변경하지 않았다. 변경은 안전한 work 체크포인트로 보존 후 원격 SHA를 재조회한다.

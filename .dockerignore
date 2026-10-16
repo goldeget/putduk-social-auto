@@ -4,6 +4,9 @@
 **/node_modules
 node_modules/*
 node_modules
+# Runtime environment files are excluded from Docker build contexts, even
+# though Git also ignores them. Keep secret-bearing files out of image layers.
+.env*
 docker-data/*
 dist
 .nx
