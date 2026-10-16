@@ -29,6 +29,10 @@ const productionDockerfilePath = new URL(
 const productionDockerfile = existsSync(productionDockerfilePath)
   ? readFileSync(productionDockerfilePath, 'utf8')
   : '';
+const imageVerifier = readFileSync(
+  new URL('../scripts/vps/verify-image.sh', import.meta.url),
+  'utf8'
+);
 
 test('disabled registrations do not exempt the generic OAuth provider', () => {
   assert.doesNotMatch(
@@ -68,4 +72,10 @@ test('production Docker image prunes development dependencies and test key fixtu
   assert.match(productionDockerfile, /pnpm install --prod --frozen-lockfile/);
   assert.match(productionDockerfile, /node_modules.*\.env/);
   assert.match(productionDockerfile, /node_modules.*(?:test|tests|__tests__)/);
+});
+
+test('image scanning still checks QuickJS wrapper text while ignoring embedded WASM base64 runs', () => {
+  assert.match(imageVerifier, /quickjs-emscripten\/dist\/generated\/emscripten-module\.WASM_/);
+  assert.ok(imageVerifier.includes('s.replace(/[A-Za-z0-9+/=]{256,}/g, "")'));
+  assert.match(imageVerifier, /privateKeyBlock\.test\(scanText\)/);
 });

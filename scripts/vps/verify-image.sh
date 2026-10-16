@@ -52,8 +52,14 @@ function walk(p, depth) {
       let b; try { b = fs.readFileSync(q); } catch { continue; }
       if (b.includes(0)) continue;
       const s = b.toString("utf8");
-      const awsToken = [...s.matchAll(/AKIA[0-9A-Z]{16}/g)].some(m => m[0] !== "AKIAIOSFODNN7EXAMPLE");
-      if (privateKeyBlock.test(s) || awsToken || tokenPatterns.some(r => r.test(s))) bad.push(q);
+      // QuickJS ships its required WebAssembly binary as long Base64 runs in
+      // generated JavaScript. Scan the executable wrapper while excluding only
+      // those encoded binary runs, which can coincidentally resemble credentials.
+      const scanText = q.includes("/quickjs-emscripten/dist/generated/emscripten-module.WASM_")
+        ? s.replace(/[A-Za-z0-9+/=]{256,}/g, "")
+        : s;
+      const awsToken = [...scanText.matchAll(/AKIA[0-9A-Z]{16}/g)].some(m => m[0] !== "AKIAIOSFODNN7EXAMPLE");
+      if (privateKeyBlock.test(scanText) || awsToken || tokenPatterns.some(r => r.test(scanText))) bad.push(q);
     }
   }
 }
