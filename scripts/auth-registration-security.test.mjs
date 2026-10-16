@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import test from 'node:test';
+
+const authService = readFileSync(
+  new URL('../apps/backend/src/services/auth/auth.service.ts', import.meta.url),
+  'utf8'
+);
+const initialAdmin = readFileSync(
+  new URL('../apps/backend/src/services/auth/create-initial-admin.ts', import.meta.url),
+  'utf8'
+);
+const integrationCompose = readFileSync(
+  new URL('../.github/ci/docker-compose.step10-test.yaml', import.meta.url),
+  'utf8'
+);
+const productionCompose = readFileSync(
+  new URL('../docker-compose.production.yaml', import.meta.url),
+  'utf8'
+);
+const integrationScript = readFileSync(
+  new URL('../.github/ci/putduk-step10-integration.sh', import.meta.url),
+  'utf8'
+);
+const productionDockerfilePath = new URL(
+  '../Dockerfile.production',
+  import.meta.url
+);
+const productionDockerfile = existsSync(productionDockerfilePath)
+  ? readFileSync(productionDockerfilePath, 'utf8')
+  : '';
+
+test('disabled registrations do not exempt the generic OAuth provider', () => {
+  assert.doesNotMatch(
+    authService,
+    /process\.env\.DISABLE_REGISTRATION\s*!==\s*'true'\s*\|\|\s*provider\s*===\s*Provider\.GENERIC/
+  );
+  assert.match(
+    authService,
+    /if \(process\.env\.DISABLE_REGISTRATION !== 'true'\) \{\s*return true;\s*\}\s*\n\s*return false;/
+  );
+});
+
+test('first account creation is private, serialized, and rechecked transactionally', () => {
+  assert.match(initialAdmin, /pg_advisory_xact_lock/);
+  assert.match(initialAdmin, /prisma\.\$transaction\(async \(tx\) =>/);
+  assert.match(initialAdmin, /tx\.organization\.count\(/);
+  assert.match(initialAdmin, /tx\.organization\.create\(/);
+  assert.match(initialAdmin, /isSuperAdmin:\s*true/);
+  assert.match(initialAdmin, /DISABLE_REGISTRATION !== 'true'/);
+  assert.match(initialAdmin, /input\.setRawMode\(true\)/);
+});
+
+test('Step 10 verifies concurrent first registration and the production registration lockout', () => {
+  assert.match(integrationCompose, /DISABLE_REGISTRATION:\s*'true'/);
+  assert.match(integrationScript, /bootstrap_admin .* &/);
+  assert.match(integrationScript, /exactly one successful request/i);
+  assert.match(integrationScript, /\/api\/auth\/can-register/);
+  assert.match(integrationScript, /GENERAL_EMAIL/);
+  assert.match(integrationScript, /user\.isSuperAdmin/);
+  assert.match(integrationScript, /Existing general-user Local login/);
+  assert.match(productionCompose, /profiles: \[admin-bootstrap\]/);
+  assert.match(productionCompose, /create-initial-admin\.js/);
+  assert.match(productionCompose, /networks:\s+- app-data/);
+});
+
+test('production Docker image prunes development dependencies and test key fixtures', () => {
+  assert.match(productionDockerfile, /pnpm install --prod --frozen-lockfile/);
+  assert.match(productionDockerfile, /node_modules.*\.env/);
+  assert.match(productionDockerfile, /node_modules.*(?:test|tests|__tests__)/);
+});

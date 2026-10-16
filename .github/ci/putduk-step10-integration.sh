@@ -61,6 +61,18 @@ dc() {
     -f "$ROOT/.github/ci/docker-compose.step10-test.yaml" "$@"
 }
 
+dc_admin() {
+  docker compose --profile admin-bootstrap --project-name "$PROJECT" --env-file "$ENV_FILE" \
+    -f "$ROOT/docker-compose.production.yaml" \
+    -f "$ROOT/.github/ci/docker-compose.step10-test.yaml" "$@"
+}
+
+dc_schema() {
+  docker compose --profile db-schema --project-name "$PROJECT" --env-file "$ENV_FILE" \
+    -f "$ROOT/docker-compose.production.yaml" \
+    -f "$ROOT/.github/ci/docker-compose.step10-test.yaml" "$@"
+}
+
 stop_sampler() {
   rm -f "$STATS_FLAG"
   if [[ -n "${STATS_PID:-}" ]]; then wait "$STATS_PID" 2>/dev/null || true; fi
@@ -339,7 +351,7 @@ done
 [[ -z "$(dc ps -q caddy)" ]]
 
 mark_phase 'apply the pinned Prisma schema once before application startup'
-dc run --rm --no-deps postiz pnpm run prisma-db-push
+dc_schema run --rm --no-deps db-schema
 
 mark_phase 'start Postiz using the production image default command'
 dc up -d --wait --wait-timeout 900 postiz
@@ -455,29 +467,85 @@ http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/login.html"
 echo 'Login page: HTTP 200.'
 
 TEST_EMAIL="putduk-step10-${GITHUB_RUN_ID}@example.invalid"
+RACE_EMAIL="putduk-step10-race-${GITHUB_RUN_ID}@example.invalid"
 TEST_PASSWORD="$(openssl rand -hex 24)"
 printf '::add-mask::%s\n' "$TEST_PASSWORD"
 printf '%s\n' "$TEST_PASSWORD" >> "$REDACTIONS_FILE"
-export TEST_EMAIL TEST_PASSWORD
+export TEST_EMAIL TEST_PASSWORD RACE_EMAIL
+
+bootstrap_admin() {
+  local email="$1" company="$2"
+  PUTDUK_BOOTSTRAP_EMAIL="$email" PUTDUK_BOOTSTRAP_COMPANY="$company" \
+    dc_admin run --rm -T --no-deps --entrypoint node \
+      -e PUTDUK_BOOTSTRAP_EMAIL -e PUTDUK_BOOTSTRAP_COMPANY -e TEST_PASSWORD \
+      admin-bootstrap -e '
+        const { PrismaClient } = require("@prisma/client");
+        const { createInitialAdmin } = require("./dist/apps/backend/src/services/auth/create-initial-admin.js");
+        const prisma = new PrismaClient();
+        createInitialAdmin(prisma, {
+          company: process.env.PUTDUK_BOOTSTRAP_COMPANY,
+          email: process.env.PUTDUK_BOOTSTRAP_EMAIL,
+          password: process.env.TEST_PASSWORD,
+        }).then(() => process.stdout.write("created\n"))
+          .catch(() => { process.exitCode = 1; })
+          .finally(() => prisma.$disconnect());
+      '
+}
+
+set +e
+bootstrap_admin "$TEST_EMAIL" 'PUTDUK Step 10 Test' >"$WORKDIR/bootstrap-one.log" 2>&1 &
+bootstrap_one_pid=$!
+bootstrap_admin "$RACE_EMAIL" 'PUTDUK Step 10 Race' >"$WORKDIR/bootstrap-two.log" 2>&1 &
+bootstrap_two_pid=$!
+wait "$bootstrap_one_pid"
+bootstrap_one_status=$?
+wait "$bootstrap_two_pid"
+bootstrap_two_status=$?
+set -e
+if ! { [[ "$bootstrap_one_status" == 0 && "$bootstrap_two_status" != 0 ]] || \
+       [[ "$bootstrap_one_status" != 0 && "$bootstrap_two_status" == 0 ]]; }; then
+  echo 'Concurrent first-admin bootstrap did not produce exactly one successful request.' >&2
+  exit 1
+fi
+if [[ "$bootstrap_one_status" == 0 ]]; then
+  TEST_EMAIL="putduk-step10-${GITHUB_RUN_ID}@example.invalid"
+else
+  TEST_EMAIL="$RACE_EMAIL"
+fi
+export TEST_EMAIL
+echo 'Concurrent first-admin bootstrap check: exactly one request succeeded.'
+
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/can-register.json" \
+  -w '%{http_code}' "$BASE_URL/api/auth/can-register")"
+[[ "$http" == 200 ]] || { echo "can-register returned HTTP $http." >&2; exit 1; }
+python3 - "$WORKDIR/can-register.json" <<'PY'
+import json, sys
+if json.load(open(sys.argv[1], encoding='utf-8')).get('register') is not False:
+    raise SystemExit('Public registration remained enabled after bootstrap.')
+PY
+
 python3 - "$WORKDIR/register.json" <<'PY'
 import json, os, sys
 with open(sys.argv[1], 'w', encoding='utf-8') as f:
-    json.dump({'email': os.environ['TEST_EMAIL'], 'password': os.environ['TEST_PASSWORD'],
-               'provider': 'LOCAL', 'company': 'PUTDUK CI Test'}, f)
+    json.dump({'email': os.environ['RACE_EMAIL'], 'password': os.environ['TEST_PASSWORD'],
+               'provider': 'LOCAL', 'company': 'PUTDUK blocked signup'}, f)
 PY
 chmod 600 "$WORKDIR/register.json"
 http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/register-response.json" \
-  -c "$WORKDIR/cookies.txt" -H 'Content-Type: application/json' \
-  --data-binary "@$WORKDIR/register.json" -w '%{http_code}' "$BASE_URL/api/auth/register")"
-[[ "$http" == 200 ]] || { echo "Test registration returned HTTP $http." >&2; exit 1; }
-python3 - "$WORKDIR/register-response.json" <<'PY'
-import json, sys
-if json.load(open(sys.argv[1], encoding='utf-8')).get('register') is not True:
-    raise SystemExit('Test account registration response was not successful.')
+  -H 'Content-Type: application/json' --data-binary "@$WORKDIR/register.json" \
+  -w '%{http_code}' "$BASE_URL/api/auth/register")"
+[[ "$http" == 400 ]] || { echo "Public test registration unexpectedly returned HTTP $http." >&2; exit 1; }
+
+python3 - "$WORKDIR/login.json" <<'PY'
+import json, os, sys
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    json.dump({'email': os.environ['TEST_EMAIL'], 'password': os.environ['TEST_PASSWORD'],
+               'provider': 'LOCAL'}, f)
 PY
+chmod 600 "$WORKDIR/login.json"
 http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/login-response.json" \
   -b "$WORKDIR/cookies.txt" -c "$WORKDIR/cookies.txt" -H 'Content-Type: application/json' \
-  --data-binary "@$WORKDIR/register.json" -w '%{http_code}' "$BASE_URL/api/auth/login")"
+  --data-binary "@$WORKDIR/login.json" -w '%{http_code}' "$BASE_URL/api/auth/login")"
 [[ "$http" == 200 ]] || { echo "Test login returned HTTP $http." >&2; exit 1; }
 python3 - "$WORKDIR/login-response.json" <<'PY'
 import json, sys
@@ -497,6 +565,59 @@ print(u['id'], u['orgId'])
 PY
 )
 [[ -n "$TEST_USER_ID" && -n "$TEST_ORG_ID" ]]
+dc exec -T -e TEST_USER_ID="$TEST_USER_ID" postiz node -e '
+  const { PrismaClient } = require("@prisma/client");
+  const p = new PrismaClient();
+  (async () => {
+    const user = await p.user.findUnique({where:{id:process.env.TEST_USER_ID}});
+    if (!user || !user.isSuperAdmin) throw new Error("initial account is not a global SUPERADMIN");
+    process.stdout.write("Initial account has global SUPERADMIN privileges.\n");
+  })().catch(()=>process.exit(1)).finally(()=>p.$disconnect());
+'
+
+GENERAL_EMAIL="putduk-step10-member-${GITHUB_RUN_ID}@example.invalid"
+GENERAL_PASSWORD="$(openssl rand -hex 24)"
+printf '::add-mask::%s\n' "$GENERAL_PASSWORD"
+printf '%s\n' "$GENERAL_PASSWORD" >> "$REDACTIONS_FILE"
+export GENERAL_EMAIL GENERAL_PASSWORD
+dc exec -T -e TEST_ORG_ID="$TEST_ORG_ID" -e GENERAL_EMAIL -e GENERAL_PASSWORD postiz node -e '
+  const { PrismaClient } = require("@prisma/client");
+  const bcrypt = require("bcrypt");
+  const p = new PrismaClient();
+  (async () => {
+    await p.user.create({data:{
+      email:process.env.GENERAL_EMAIL,
+      password:bcrypt.hashSync(process.env.GENERAL_PASSWORD, 10),
+      providerName:"LOCAL", activated:true, timezone:0,
+      organizations:{create:{role:"USER",organization:{connect:{id:process.env.TEST_ORG_ID}}}},
+    }});
+    process.stdout.write("General user login fixture prepared.\n");
+  })().catch(()=>process.exit(1)).finally(()=>p.$disconnect());
+'
+
+python3 - "$WORKDIR/member-login.json" <<'PY'
+import json, os, sys
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    json.dump({'email': os.environ['GENERAL_EMAIL'], 'password': os.environ['GENERAL_PASSWORD'],
+               'provider': 'LOCAL'}, f)
+PY
+chmod 600 "$WORKDIR/member-login.json"
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/member-login-response.json" \
+  -c "$WORKDIR/member-cookies.txt" -H 'Content-Type: application/json' \
+  --data-binary "@$WORKDIR/member-login.json" -w '%{http_code}' "$BASE_URL/api/auth/login")"
+[[ "$http" == 200 ]] || { echo "Existing general-user login returned HTTP $http." >&2; exit 1; }
+http="$(postiz_curl --silent --show-error --max-time 30 -o "$WORKDIR/member-self.json" \
+  -b "$WORKDIR/member-cookies.txt" -w '%{http_code}' "$BASE_URL/api/user/self")"
+[[ "$http" == 200 ]] || { echo "Existing general-user dashboard API returned HTTP $http." >&2; exit 1; }
+dc exec -T -e GENERAL_EMAIL postiz node -e '
+  const { PrismaClient, Role } = require("@prisma/client");
+  const p = new PrismaClient();
+  (async () => {
+    const user = await p.user.findFirst({where:{email:process.env.GENERAL_EMAIL},include:{organizations:true}});
+    if (!user || user.isSuperAdmin || user.organizations.length !== 1 || user.organizations[0].role !== Role.USER) throw new Error("general user role mismatch");
+    process.stdout.write("Existing general-user Local login and USER membership verified.\n");
+  })().catch(()=>process.exit(1)).finally(()=>p.$disconnect());
+'
 
 INTEGRATION_ID="$(dc exec -T -e TEST_ORG_ID="$TEST_ORG_ID" -e TEST_USER_ID="$TEST_USER_ID" postiz node -e '
   const { PrismaClient } = require("@prisma/client");
@@ -509,7 +630,7 @@ INTEGRATION_ID="$(dc exec -T -e TEST_ORG_ID="$TEST_ORG_ID" -e TEST_USER_ID="$TES
   })().catch(()=>process.exit(1)).finally(()=>p.$disconnect());
 ')"
 [[ -n "$INTEGRATION_ID" ]]
-echo 'Test account registered/logged in; authenticated dashboard and organization administrator role verified.'
+echo 'Private first admin and existing general-user logins, public registration lockout, dashboard, and role checks verified.'
 
 mark_phase 'create and read a Postiz draft'
 write_post_payload() {
@@ -883,7 +1004,8 @@ printf '%s\n' "$stats_summary"
 
 - Source revision: $GITHUB_SHA
 - Six services healthy; Caddy excluded; no host ports published; Postiz is reached from the runner through its private IP on an internal network
-- Test registration/login and dashboard API: passed (synthetic .invalid account)
+- Private first-admin bootstrap: exactly one of two concurrent attempts succeeded; public registration stayed disabled
+- SUPERADMIN login and dashboard API: passed (synthetic .invalid account)
 - Draft create/read-back: passed
 - Future schedule and Temporal workflow: passed; terminated before publish activity
 - Postiz DB backup/restore: passed to separate DB

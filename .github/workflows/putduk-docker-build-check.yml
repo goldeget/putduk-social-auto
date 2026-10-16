@@ -11,6 +11,7 @@ on:
       - .github/ci/step10-cleanup.sh
       - .github/ci/test-step10-cleanup.sh
       - .github/ci/docker-compose.step10-test.yaml
+      - docker-compose.production.yaml
       - scripts/step10-es-snapshot-response.mjs
       - scripts/step10-es-snapshot-response.test.mjs
       - scripts/step10-cleanup.test.mjs
@@ -21,7 +22,7 @@ on:
       - scripts/step10-restart-readiness.mjs
       - scripts/step10-restart-readiness.test.mjs
       - scripts/step10-restart-flow.test.mjs
-      - Dockerfile.dev
+      - Dockerfile.production
       - package.json
       - pnpm-lock.yaml
       - apps/frontend/**
@@ -30,6 +31,11 @@ on:
       - libraries/**
       - scripts/pm2-start-order.test.mjs
       - scripts/production-startup.test.mjs
+      - scripts/auth-registration-security.test.mjs
+      - scripts/vps/verify-image.sh
+      - scripts/vps/build-image.sh
+      - jest.config.ts
+      - apps/backend/src/services/auth/**
       - scripts/backend-readiness.mjs
       - scripts/backend-readiness.test.mjs
       - scripts/step10-network-access.test.mjs
@@ -59,7 +65,7 @@ jobs:
           fetch-depth: 1
 
       - name: Verify PM2 startup, backend readiness, and isolated network access
-        run: node --test scripts/pm2-start-order.test.mjs scripts/production-startup.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs scripts/step10-upload-response.test.mjs scripts/step10-temporal-status.test.mjs scripts/step10-temporal-start-error.test.mjs scripts/step10-temporal-terminate.test.mjs scripts/step10-restart-readiness.test.mjs scripts/step10-restart-flow.test.mjs scripts/step10-es-snapshot-response.test.mjs scripts/step10-cleanup.test.mjs
+        run: node --test scripts/pm2-start-order.test.mjs scripts/production-startup.test.mjs scripts/auth-registration-security.test.mjs scripts/backend-readiness.test.mjs scripts/step10-network-access.test.mjs scripts/step10-upload-response.test.mjs scripts/step10-temporal-status.test.mjs scripts/step10-temporal-start-error.test.mjs scripts/step10-temporal-terminate.test.mjs scripts/step10-restart-readiness.test.mjs scripts/step10-restart-flow.test.mjs scripts/step10-es-snapshot-response.test.mjs scripts/step10-cleanup.test.mjs
 
       - name: Test run-scoped cleanup with root-owned files
         shell: bash
@@ -159,7 +165,8 @@ jobs:
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --build-arg "NEXT_PUBLIC_VERSION=$GITHUB_SHA" \
             --tag "$IMAGE_TAG" \
-            --file Dockerfile.dev \
+            --tag "putduk-social-auto:$GITHUB_SHA" \
+            --file Dockerfile.production \
             .
           result=$?
           set -e
@@ -211,41 +218,13 @@ jobs:
               raise SystemExit("Secret-like environment variable is configured in image metadata")
           PY
 
-      - name: Scan image files for credential artifacts
+      - name: Verify production image metadata and scan credential artifacts
         if: success()
         env:
           IMAGE_TAG: putduk-social-auto:step10-${{ github.sha }}
         run: |
           set -euo pipefail
-          docker run --rm --network none --entrypoint node "$IMAGE_TAG" -e '
-            const fs = require("node:fs");
-            const path = require("node:path");
-            const roots = ["/app"];
-            const secretFile = /(^|\/)\.env(?:$|\..+)$/;
-            const secretPattern = /gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]+|sk_(?:live|test)_[A-Za-z0-9]{16,}/;
-            const extensions = new Set([".js", ".cjs", ".mjs", ".json", ".html", ".css", ".ts", ".tsx", ".yaml", ".yml", ".map"]);
-            const findings = [];
-            function walk(dir) {
-              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                const file = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                  if (entry.name !== "node_modules" && entry.name !== ".git") walk(file);
-                } else if (entry.isFile()) {
-                  if (secretFile.test(file) && !/\.(?:example|sample|template)$/.test(file)) findings.push(file);
-                  if (extensions.has(path.extname(file))) {
-                    const stat = fs.statSync(file);
-                    if (stat.size <= 8 * 1024 * 1024 && secretPattern.test(fs.readFileSync(file, "utf8"))) findings.push(file);
-                  }
-                }
-              }
-            }
-            for (const root of roots) walk(root);
-            if (findings.length) {
-              for (const file of [...new Set(findings)]) console.error(`Potential credential artifact: ${file}`);
-              process.exit(1);
-            }
-            console.log("No checked credential artifacts or known token patterns found.");
-          '
+          bash scripts/vps/verify-image.sh "$GITHUB_SHA"
 
       - name: Check disk headroom before isolated integration services
         if: success()

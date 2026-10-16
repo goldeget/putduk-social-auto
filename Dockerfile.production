@@ -1,0 +1,56 @@
+FROM node:22.20-bookworm-slim@sha256:b21fe589dfbe5cc39365d0544b9be3f1f33f55f3c86c87a76ff65a02f8f5848e AS build
+ARG NEXT_PUBLIC_VERSION
+ENV NEXT_PUBLIC_VERSION=$NEXT_PUBLIC_VERSION
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    g++ \
+    make \
+    python3-pip \
+    bash \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN addgroup --system www \
+ && adduser --system --ingroup www --home /www --shell /usr/sbin/nologin www \
+ && mkdir -p /www/.pm2 /uploads /config
+
+RUN npm --no-update-notifier --no-fund --global install pnpm@10.6.1 pm2@7.0.4
+
+WORKDIR /app
+COPY . /app
+RUN pnpm install --frozen-lockfile
+RUN pnpm exec jest --runInBand --runTestsByPath apps/backend/src/services/auth/auth.registration-security.spec.ts
+RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm run build
+RUN pnpm exec prisma generate --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma \
+ && cp -a /app/node_modules/.prisma /tmp/putduk-prisma-client \
+ && pnpm install --prod --frozen-lockfile --ignore-scripts \
+ && mkdir -p /app/node_modules/.prisma \
+ && cp -a /tmp/putduk-prisma-client/. /app/node_modules/.prisma/ \
+ && rm -rf /tmp/putduk-prisma-client \
+ && find /app/node_modules -type f -name '.env' -delete \
+ && find /app/node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name __fixtures__ \) -prune -exec rm -rf '{}' + \
+ && find /app -path /app/node_modules -prune -o -type f -name '*.spec.ts' -delete \
+ && rm -rf /app/scripts /app/reports /app/docs /app/.claude /app/var/docker \
+ && test -s /app/node_modules/.prisma/client/index.js \
+ && mkdir -p /app/apps/frontend/.next/cache \
+ && chown -R www:www /app/apps/frontend/.next/cache /app/node_modules/.prisma
+
+FROM node:22.20-bookworm-slim@sha256:b21fe589dfbe5cc39365d0544b9be3f1f33f55f3c86c87a76ff65a02f8f5848e AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends bash nginx \
+ && rm -rf /var/lib/apt/lists/* \
+ && addgroup --system www \
+ && adduser --system --ingroup www --home /www --shell /usr/sbin/nologin www \
+ && mkdir -p /www/.pm2 /var/lib/nginx /var/log/nginx /uploads /config \
+      /tmp/nginx/client /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/uwsgi /tmp/nginx/scgi \
+ && chown -R www:www /www /var/lib/nginx /var/log/nginx /uploads /config /tmp/nginx
+
+RUN npm --no-update-notifier --no-fund --global install pnpm@10.6.1 pm2@7.0.4 prisma@6.5.0
+RUN find /usr/local/lib/node_modules -type f -name '.env' -delete \
+ && find /usr/local/lib/node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name __fixtures__ \) -prune -exec rm -rf '{}' +
+
+WORKDIR /app
+COPY --from=build --chown=root:root /app /app
+COPY var/docker/nginx.conf /etc/nginx/nginx.conf
+RUN chown -R www:www /app/apps/frontend/.next/cache /app/node_modules/.prisma
+
+ENV HOME=/www PM2_HOME=/www/.pm2
+USER www:www
+CMD ["sh", "-c", "nginx && pnpm run pm2"]

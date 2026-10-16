@@ -69,7 +69,7 @@ docker buildx build --load --platform linux/amd64 \
   --label "org.opencontainers.image.revision=$sha" \
   --label "org.opencontainers.image.source=https://github.com/goldeget/putduk-social-auto" \
   --build-arg "NEXT_PUBLIC_VERSION=$sha" \
-  --tag "$image" --file "$source_tree/Dockerfile.dev" "$source_tree" >"$build_log" 2>&1 &
+  --tag "$image" --file "$source_tree/Dockerfile.production" "$source_tree" >"$build_log" 2>&1 &
 build_pid=$!
 bash "$monitor" "$build_pid" "$((min_abort * 1024 * 1024))" "$log" &
 monitor_pid=$!

@@ -6,7 +6,7 @@ const rootPackage = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8')
 );
 const dockerfile = readFileSync(
-  new URL('../Dockerfile.dev', import.meta.url),
+  new URL('../Dockerfile.production', import.meta.url),
   'utf8'
 );
 const nginx = readFileSync(
@@ -29,7 +29,7 @@ test('application restart does not download Prisma or mutate the database schema
   );
   assert.match(
     rootPackage.scripts['prisma-db-push'],
-    /^pnpm exec prisma db push /
+    /^prisma db push /
   );
   assert.equal(rootPackage.devDependencies.prisma, '6.5.0');
 });
@@ -39,7 +39,7 @@ test('Step 10 applies schema once before starting Postiz with its default comman
     'postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch temporal'
   );
   const schemaApply = integrationScript.indexOf(
-    'dc run --rm --no-deps postiz pnpm run prisma-db-push'
+    'dc_schema run --rm --no-deps db-schema'
   );
   const postizStart = integrationScript.indexOf(
     'dc up -d --wait --wait-timeout 900 postiz'
@@ -60,10 +60,29 @@ test('Step 10 applies schema once before starting Postiz with its default comman
   assert.doesNotMatch(integrationCompose, /^\s+command:/m);
 });
 
-test('Docker image installs only the exact lockfile dependency graph', () => {
+test('production Docker image installs the exact lockfile and prunes development dependencies', () => {
+  for (const packageName of [
+    '@nestjs/cli',
+    '@tailwindcss/postcss',
+    '@types/bcrypt',
+    '@types/multer',
+    'sass',
+    'tailwindcss',
+    'tailwindcss-rtl',
+  ]) {
+    assert.equal(rootPackage.dependencies[packageName], undefined);
+    assert.ok(rootPackage.devDependencies[packageName]);
+  }
   assert.match(dockerfile, /^RUN pnpm install --frozen-lockfile$/m);
-  assert.match(dockerfile, /^FROM node:22\.20-bookworm-slim@sha256:[a-f0-9]{64}$/m);
+  assert.match(dockerfile, /pnpm install --prod --frozen-lockfile --ignore-scripts/);
+  assert.match(dockerfile, /pnpm exec jest --runInBand --runTestsByPath apps\/backend\/src\/services\/auth\/auth\.registration-security\.spec\.ts/);
+  assert.match(dockerfile, /find \/app\/node_modules -type f -name '\.env' -delete/);
+  assert.match(dockerfile, /-name test -o -name tests -o -name __tests__/);
+  assert.match(dockerfile, /-name '\*\.spec\.ts' -delete/);
+  assert.match(dockerfile, /rm -rf \/app\/scripts \/app\/reports/);
+  assert.match(dockerfile, /^FROM node:22\.20-bookworm-slim@sha256:[a-f0-9]{64}(?: AS (?:build|runtime))?$/m);
   assert.match(dockerfile, /pm2@7\.0\.4/);
+  assert.match(dockerfile, /prisma@6\.5\.0/);
   assert.match(dockerfile, /^USER www:www$/m);
   assert.match(dockerfile, /^CMD \["sh", "-c", "nginx && pnpm run pm2"\]$/m);
   assert.match(nginx, /^\s*listen 5000;$/m);

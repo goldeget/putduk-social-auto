@@ -1,6 +1,6 @@
 # 운영 배포 구성 설계
 
-이 문서는 향후 Ubuntu 서버에서 Postiz를 운영할 때 사용할 Compose 초안과 복구 절차를 설명합니다. 현재 서버는 구매되지 않았으며, 이 Compose는 실행·배포하지 않았습니다. 정적 문법 검사는 실제 서버에서의 동작 검증을 대신하지 않습니다.
+이 문서는 Ubuntu 서버에서 Postiz를 운영할 때 사용할 Compose 구성과 복구 절차를 설명합니다. Contabo VPS는 준비되었지만, 이 Compose는 아직 공개 운영에 기동하지 않았습니다. 정적 문법 검사는 실제 서버에서의 동작 검증을 대신하지 않습니다.
 
 ## 구성과 네트워크
 
@@ -28,13 +28,29 @@ Caddy만 호스트의 80/443 포트를 엽니다. Postiz의 5000 포트는 Caddy
 
 `.env.production.example`은 값 형식 안내용이며 그대로 사용하지 않습니다. 실제 설정 파일은 저장소 밖인 `/etc/putduk/.env.production`에 두고 root만 읽게 합니다(예: 소유자 `root:root`, 권한 `0600`). 실제 비밀값, OAuth 토큰, 백업 파일은 GitHub에 저장하지 않습니다. 운영 비밀번호는 서로 다른 긴 난수로 생성하고 주기적인 회전 절차를 별도로 마련하세요. PostgreSQL/Redis 접속 URL에 들어가는 세 비밀번호는 URL 인코딩 문제를 피하도록 영문자·숫자·밑줄·하이픈 등 URL-safe 문자만 사용해야 합니다. JWT 비밀값도 다른 비밀번호와 공유하지 마세요.
 
-`DISABLE_REGISTRATION=true`로 일반 가입을 닫습니다. Postiz 코드상 최초 조직이 없을 때 초기 가입 예외가 가능한 것으로 보이나, 운영 이미지와 최신 코드에서 이를 재검증해야 합니다. 공개 서버를 열기 전 방화벽과 SSH 터널 등으로 접근을 제한한 상태에서 최초 관리자 계정을 만들고, 별도 테스트를 거쳐 가입이 닫혔는지 확인하세요. 이 초안의 환경 변수만으로 첫 사용자가 전역 super-admin이 되는지는 **미검증**입니다. 운영 개방 전에 실제 격리 복제본에서 관리자 권한과 접근 통제를 확인해야 합니다.
+`DISABLE_REGISTRATION=true`는 Local 및 Generic OAuth를 포함해 모든 공개 회원가입을 닫습니다. 첫 관리자는 공개 웹 가입으로 만들지 않습니다. 운영용 Postiz 이미지를 준비한 뒤 데이터베이스만 먼저 시작하고, 새 설치 DB에 스키마를 적용합니다. 스키마 명령은 앱/프록시 네트워크가 없는 내부 전용 `db-schema` 프로필입니다. 기존 데이터가 있는 DB에서는 백업 및 변경 검토 없이 실행하지 않습니다.
+
+```bash
+docker compose --env-file /etc/putduk/.env.production \
+  -f docker-compose.production.yaml --profile db-schema \
+  run --rm db-schema
+```
+
+그 다음 아래 대화형 명령으로 별도 `admin-bootstrap` 프로필을 실행합니다. 이 도구도 내부 DB 네트워크에만 접속합니다. 암호는 터미널에서 숨겨 입력하며, PostgreSQL transaction advisory lock과 동일 트랜잭션의 조직 수 확인으로 한 번만 생성됩니다. 두 번째 실행은 기존 계정이나 데이터를 변경하지 않고 거부됩니다.
+
+```bash
+docker compose --env-file /etc/putduk/.env.production \
+  -f docker-compose.production.yaml --profile admin-bootstrap \
+  run --rm admin-bootstrap
+```
+
+관리자 계정 암호는 12~72 UTF-8 바이트를 요구하며 화면에 표시하지 않습니다. 초기화 후 `/api/auth/can-register`가 `false`인지, 신규 가입이 거부되는지, 관리자 계정이 로그인할 수 있는지 확인합니다. `admin-bootstrap` 프로필은 기본 `docker compose up`에서 실행되지 않습니다.
 
 OAuth 공급자 콘솔에는 실제 HTTPS 도메인과 저장소 코드에서 사용하는 콜백 경로를 등록해야 합니다. 현재 코드 기준 경로는 Facebook `/integrations/social/facebook`, Instagram `/integrations/social/instagram` 및 `/integrations/social/instagram-standalone`, Threads `/integrations/social/threads`, TikTok `/integrations/social/tiktok`, YouTube `/integrations/social/youtube`입니다. 앱 심사, 허용 계정, 기능별 권한은 공급자별로 다르며 현재 승인 상태는 확인되지 않았습니다. 공개 HTTPS 주소와 필요한 앱 승인 없이는 실제 인증을 검증할 수 없습니다.
 
 ## 향후 서버에서 수행할 절차
 
-아래는 안내용 명령이며 이번 작업에서는 실행하지 않았습니다.
+아래 공개 전 준비 절차는 운영 서버에서 승인된 유지보수 창에 진행합니다. Step 12-B에서는 Docker 이미지를 빌드·검증하고, 설정한 Docker 통합 테스트에서만 격리 컨테이너를 실행합니다. 운영 Compose는 활성화하지 않았습니다.
 
 1. 서버에서 SSH 키 로그인, 최소 방화벽(공개 80/443과 관리자용 제한 SSH), 보안 업데이트 및 Docker 부팅 자동 시작을 구성합니다. Docker 소켓을 인터넷에 공개하지 않습니다.
 2. 실제 도메인 DNS를 서버로 연결하고 HTTPS 프록시 발급에 필요한 80/443 도달성을 확인합니다. Cloudflare는 DNS 프록시나 R2가 꼭 필요한 구성 요소가 아닙니다. 도메인/외부 저장소의 별도 요금과 계정은 현재 미확인입니다.

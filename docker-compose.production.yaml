@@ -88,6 +88,45 @@ services:
       start_period: 120s
     logging: *default-logging
 
+  admin-bootstrap:
+    image: ${POSTIZ_IMAGE:?Set POSTIZ_IMAGE to a tested immutable image digest}
+    profiles: [admin-bootstrap]
+    init: true
+    entrypoint: ["node", "/app/dist/apps/backend/src/services/auth/create-initial-admin.js"]
+    stdin_open: true
+    tty: true
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://postiz-user:${POSTIZ_DB_PASSWORD:?Set POSTIZ_DB_PASSWORD}@postiz-postgres:5432/postiz-db
+      JWT_SECRET: ${JWT_SECRET:?Set a unique JWT_SECRET}
+      DISABLE_REGISTRATION: "true"
+    networks:
+      - app-data
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+    logging: *default-logging
+
+  db-schema:
+    image: ${POSTIZ_IMAGE:?Set POSTIZ_IMAGE to a tested immutable image digest}
+    profiles: [db-schema]
+    init: true
+    entrypoint: ["prisma"]
+    command:
+      - db
+      - push
+      - --schema
+      - /app/libraries/nestjs-libraries/src/database/prisma/schema.prisma
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://postiz-user:${POSTIZ_DB_PASSWORD:?Set POSTIZ_DB_PASSWORD}@postiz-postgres:5432/postiz-db
+    networks:
+      - app-data
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+    logging: *default-logging
+
   postiz-postgres:
     image: postgres:17.5-alpine
     restart: unless-stopped

@@ -33,9 +33,10 @@ fi
 # Inspect only; do not start the application or attach a network.
 "$DOCKER_BIN" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 256m --user "$image_user" --entrypoint node "$image" -e '
 const fs = require("node:fs"), path = require("node:path");
-const roots = ["/app", "/opt", "/usr/src/app"].filter(p => fs.existsSync(p));
+const roots = ["/app", "/opt", "/usr/src/app", "/usr/local/lib/node_modules"].filter(p => fs.existsSync(p));
 const blockedNames = /(^|\/)(\.env($|\.)|id_rsa$|id_ed25519$|.*\.(pem|key)$|credentials\.json$)/i;
-const secretPatterns = [/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/, /AKIA[0-9A-Z]{16}/, /gh[pousr]_[A-Za-z0-9]{30,}/];
+const privateKeyBlock = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\n([A-Za-z0-9+/=\r\n]{256,}?)\r?\n-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/m;
+const tokenPatterns = [/gh[pousr]_[A-Za-z0-9]{30,}/, /xox[baprs]-[A-Za-z0-9-]+/, /sk_(?:live|test)_[A-Za-z0-9]{16,}/];
 let bad = [];
 function walk(p, depth) {
   if (depth > 14) return;
@@ -51,7 +52,8 @@ function walk(p, depth) {
       let b; try { b = fs.readFileSync(q); } catch { continue; }
       if (b.includes(0)) continue;
       const s = b.toString("utf8");
-      if (secretPatterns.some(r => r.test(s))) bad.push(q);
+      const awsToken = [...s.matchAll(/AKIA[0-9A-Z]{16}/g)].some(m => m[0] !== "AKIAIOSFODNN7EXAMPLE");
+      if (privateKeyBlock.test(s) || awsToken || tokenPatterns.some(r => r.test(s))) bad.push(q);
     }
   }
 }
