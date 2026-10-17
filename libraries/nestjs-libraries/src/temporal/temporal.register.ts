@@ -1,5 +1,5 @@
 import { Global, Injectable, Logger, Module, OnModuleInit } from '@nestjs/common';
-import type { TemporalService } from 'nestjs-temporal-core';
+import { TemporalService } from 'nestjs-temporal-core';
 import type { Connection } from '@temporalio/client';
 
 const TRANSIENT_TEMPORAL_CODES = new Set([

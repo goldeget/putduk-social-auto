@@ -13,6 +13,12 @@ describe('TemporalRegister', () => {
     jest.restoreAllMocks();
   });
 
+  it('keeps TemporalService as the runtime Nest injection token', () => {
+    expect(Reflect.getMetadata('design:paramtypes', TemporalRegister)).toEqual([
+      TemporalService,
+    ]);
+  });
+
   it('retries transient Temporal unavailability until the RPC is ready', async () => {
     process.env.TEMPORAL_TLS = 'false';
     process.env.TEMPORAL_NAMESPACE = 'default';
