@@ -46,7 +46,7 @@ test('disabled registrations do not exempt the generic OAuth provider', () => {
 });
 
 test('first account creation is private, serialized, and rechecked transactionally', () => {
-  assert.match(initialAdmin, /pg_advisory_xact_lock/);
+  assert.match(initialAdmin, /\$executeRaw`LOCK TABLE "Organization" IN EXCLUSIVE MODE`/);
   assert.match(initialAdmin, /prisma\.\$transaction\(async \(tx\) =>/);
   assert.match(initialAdmin, /tx\.organization\.count\(/);
   assert.match(initialAdmin, /tx\.organization\.create\(/);

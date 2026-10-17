@@ -9,8 +9,6 @@ type InitialAdminInput = {
   password: string;
 };
 
-const INITIAL_ADMIN_LOCK_ID = 2026121701;
-
 export async function createInitialAdmin(
   prisma: PrismaClient,
   input: InitialAdminInput
@@ -30,7 +28,7 @@ export async function createInitialAdmin(
   }
 
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(${INITIAL_ADMIN_LOCK_ID})`;
+    await tx.$executeRaw`LOCK TABLE "Organization" IN EXCLUSIVE MODE`;
 
     if ((await tx.organization.count()) !== 0) {
       throw new Error('Initial administrator has already been created');
