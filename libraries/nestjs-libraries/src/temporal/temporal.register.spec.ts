@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { TemporalService } from 'nestjs-temporal-core';
 import { TemporalRegister } from './temporal.register';
