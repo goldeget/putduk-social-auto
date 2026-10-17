@@ -479,7 +479,7 @@ bootstrap_result="$(PUTDUK_BOOTSTRAP_EMAIL="$TEST_EMAIL" \
   --entrypoint node -e PUTDUK_BOOTSTRAP_EMAIL -e PUTDUK_BOOTSTRAP_COMPANY \
   -e RACE_EMAIL -e TEST_EMAIL -e TEST_PASSWORD admin-bootstrap -e '
     const { PrismaClient } = require("@prisma/client");
-    const { createInitialAdmin } = require("/app/dist/apps/backend/src/services/auth/create-initial-admin.js");
+    const { createInitialAdmin } = require("./dist/apps/backend/src/services/auth/create-initial-admin.js");
     const emails = [process.env.TEST_EMAIL, process.env.RACE_EMAIL];
     const clients = [new PrismaClient(), new PrismaClient()];
     const attempts = emails.map((email, index) => createInitialAdmin(clients[index], {

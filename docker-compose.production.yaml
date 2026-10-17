@@ -92,7 +92,8 @@ services:
     image: ${POSTIZ_IMAGE:?Set POSTIZ_IMAGE to a tested immutable image digest}
     profiles: [admin-bootstrap]
     init: true
-    entrypoint: ["node", "/app/dist/apps/backend/src/services/auth/create-initial-admin.js"]
+    working_dir: /app/apps/backend
+    entrypoint: ["node", "/app/apps/backend/dist/apps/backend/src/services/auth/create-initial-admin.js"]
     stdin_open: true
     tty: true
     restart: "no"
