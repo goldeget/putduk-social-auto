@@ -18,6 +18,7 @@ WORKDIR /app
 COPY . /app
 RUN pnpm install --frozen-lockfile
 RUN pnpm exec jest --runInBand --runTestsByPath apps/backend/src/services/auth/auth.registration-security.spec.ts
+RUN pnpm exec jest --runInBand --runTestsByPath libraries/nestjs-libraries/src/temporal/temporal.register.spec.ts
 RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm run build
 RUN pnpm exec prisma generate --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma \
  && cp -a /app/node_modules/.prisma /tmp/putduk-prisma-client \
